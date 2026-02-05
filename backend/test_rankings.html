@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>市场动态测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a1a; color: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 20px; background: #2a2a2a; border-radius: 8px; }
+        .rankings { display: flex; gap: 40px; }
+        .list { flex: 1; }
+        .item { padding: 10px; margin: 5px 0; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; justify-content: space-between; }
+        .up { color: #ff5252; }
+        .down { color: #00c853; }
+        h2 { margin-top: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 市场动态实时测试</h1>
+        <div class="section">
+            <div id="status">加载中...</div>
+            <div class="rankings">
+                <div class="list">
+                    <h2>📈 涨幅榜</h2>
+                    <div id="gainers"></div>
+                </div>
+                <div class="list">
+                    <h2>📉 跌幅榜</h2>
+                    <div id="losers"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        async function loadRankings() {
+            try {
+                const response = await fetch('http://localhost:8000/api/market/rankings');
+                const data = await response.json();
+                
+                document.getElementById('status').textContent = `更新时间: ${new Date().toLocaleTimeString()}`;
+                
+                const gainersHtml = data.gainers.map(item => `
+                    <div class="item">
+                        <div>
+                            <strong>${item.名称}</strong>
+                            <span style="color: #888; margin-left: 10px;">${item.代码}</span>
+                        </div>
+                        <div>
+                            <span style="margin-right: 15px;">${item.最新价.toFixed(2)}</span>
+                            <span class="up">+${item.涨跌幅.toFixed(2)}%</span>
+                        </div>
+                    </div>
+                `).join('');
+                
+                const losersHtml = data.losers.map(item => `
+                    <div class="item">
+                        <div>
+                            <strong>${item.名称}</strong>
+                            <span style="color: #888; margin-left: 10px;">${item.代码}</span>
+                        </div>
+                        <div>
+                            <span style="margin-right: 15px;">${item.最新价.toFixed(2)}</span>
+                            <span class="down">${item.涨跌幅.toFixed(2)}%</span>
+                        </div>
+                    </div>
+                `).join('');
+                
+                document.getElementById('gainers').innerHTML = gainersHtml;
+                document.getElementById('losers').innerHTML = losersHtml;
+            } catch (error) {
+                document.getElementById('status').textContent = '加载失败: ' + error.message;
+            }
+        }
+        
+        loadRankings();
+        setInterval(loadRankings, 60000); // 每分钟更新
+    </script>
+</body>
+</html>
