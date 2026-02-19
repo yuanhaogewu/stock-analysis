@@ -3,7 +3,7 @@ import "./globals.css";
 import ClientLayout from "@/components/ClientLayout";
 
 export const metadata: Metadata = {
-    title: "A股专业股票分析工具",
+    title: "智弈 (MindNode) - 股票分析系统",
     description: "多维度、系统性专业股票分析",
 };
 

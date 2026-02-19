@@ -77,7 +77,7 @@ export default function AdminLoginPage() {
                     🔐 管理员登录
                 </h1>
                 <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '32px' }}>
-                    股票分析系统后台管理
+                    智弈 (MindNode) 管理后台
                 </p>
 
                 {!showReset ? (

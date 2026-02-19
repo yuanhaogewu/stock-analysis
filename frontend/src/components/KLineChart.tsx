@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 
 interface KLineData {
@@ -18,11 +18,36 @@ interface Props {
 
 const KLineChart: React.FC<Props> = ({ data, symbol }) => {
     const chartRef = useRef<HTMLDivElement>(null);
+    const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+
+    useEffect(() => {
+        const currentTheme = document.documentElement.getAttribute('data-theme') as 'dark' | 'light' || 'dark';
+        setTheme(currentTheme);
+
+        const observer = new MutationObserver(() => {
+            const updatedTheme = document.documentElement.getAttribute('data-theme') as 'dark' | 'light' || 'dark';
+            setTheme(updatedTheme);
+        });
+
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         if (!chartRef.current || data.length === 0) return;
 
         const myChart = echarts.init(chartRef.current);
+        const isDark = theme === 'dark';
+        const colors = {
+            text: isDark ? '#ffffff' : '#1a1a1a',
+            secondaryText: isDark ? '#b0bec5' : '#757575',
+            line: isDark ? '#455a64' : '#e0e0e0',
+            splitLine: isDark ? '#263238' : '#f0f0f0',
+            tooltipBg: isDark ? 'rgba(20, 26, 35, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+            tooltipBorder: isDark ? '#37474f' : '#d1d1d1',
+            tooltipText: isDark ? '#ffffff' : '#1a1a1a',
+            tooltipLabel: isDark ? '#bbb' : '#666'
+        };
 
         const volumes = data.map(item => item.成交量);
         const dates = data.map(item => item.日期);
@@ -80,17 +105,51 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
         const option: echarts.EChartsOption = {
             backgroundColor: 'transparent',
             title: [
-                { text: `${symbol} K线技术分析`, left: 'center', top: '0', textStyle: { color: '#e0e0e0', fontSize: 14, fontWeight: 'normal' } },
-                { text: '成交量 (Volume)', left: '10', top: '58%', textStyle: { color: '#90a4ae', fontSize: 12, fontWeight: 'normal' } },
-                { text: 'MACD 指标', left: '10', top: '78%', textStyle: { color: '#90a4ae', fontSize: 12, fontWeight: 'normal' } }
+                { text: `${symbol} K线技术分析`, left: 'center', top: '10', textStyle: { color: colors.text, fontSize: 18, fontWeight: 'bold' } },
+                {
+                    text: '{bar|} 成交量 (Volume)',
+                    left: '2%',
+                    top: '58%',
+                    textStyle: {
+                        color: colors.text,
+                        fontSize: 14,
+                        fontWeight: 'bold',
+                        rich: {
+                            bar: {
+                                width: 4,
+                                height: 16,
+                                backgroundColor: '#2962ff',
+                                borderRadius: 2
+                            }
+                        }
+                    }
+                },
+                {
+                    text: '{bar|} MACD 指标',
+                    left: '2%',
+                    top: '80%',
+                    textStyle: {
+                        color: colors.text,
+                        fontSize: 14,
+                        fontWeight: 'bold',
+                        rich: {
+                            bar: {
+                                width: 4,
+                                height: 16,
+                                backgroundColor: '#2962ff',
+                                borderRadius: 2
+                            }
+                        }
+                    }
+                }
             ],
             tooltip: {
                 trigger: 'axis',
                 axisPointer: { type: 'cross' },
-                backgroundColor: '#141a23',
-                borderColor: '#263238',
+                backgroundColor: colors.tooltipBg,
+                borderColor: colors.tooltipBorder,
                 borderWidth: 1,
-                textStyle: { color: '#fff' },
+                textStyle: { color: colors.tooltipText },
                 formatter: function (params: any) {
                     const dataIndex = params[0].dataIndex;
                     const item = data[dataIndex];
@@ -100,24 +159,24 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                     const color = change >= 0 ? '#ff5252' : '#00c853';
 
                     let res = `<div style="padding: 8px; min-width: 150px;">
-                        <div style="margin-bottom: 8px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 4px;">${item.日期}</div>
+                        <div style="margin-bottom: 8px; font-weight: bold; border-bottom: 1px solid ${isDark ? '#444' : '#eee'}; padding-bottom: 4px; color: ${colors.tooltipText};">${item.日期}</div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #888;">开盘:</span> <span style="font-weight: bold;">${item.开盘.toFixed(2)}</span>
+                            <span style="color: ${colors.tooltipLabel};">开盘:</span> <span style="font-weight: bold; color: ${colors.tooltipText};">${item.开盘.toFixed(2)}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #888;">最高:</span> <span style="font-weight: bold; color: #ff5252;">${item.最高.toFixed(2)}</span>
+                            <span style="color: ${colors.tooltipLabel};">最高:</span> <span style="font-weight: bold; color: #ff5252;">${item.最高.toFixed(2)}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #888;">最低:</span> <span style="font-weight: bold; color: #00c853;">${item.最低.toFixed(2)}</span>
+                            <span style="color: ${colors.tooltipLabel};">最低:</span> <span style="font-weight: bold; color: #00c853;">${item.最低.toFixed(2)}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #888;">收盘:</span> <span style="font-weight: bold;">${item.收盘.toFixed(2)}</span>
+                            <span style="color: ${colors.tooltipLabel};">收盘:</span> <span style="font-weight: bold; color: ${colors.tooltipText};">${item.收盘.toFixed(2)}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #888;">涨跌幅:</span> <span style="font-weight: bold; color: ${color};">${change >= 0 ? '+' : ''}${changePercent}%</span>
+                            <span style="color: ${colors.tooltipLabel};">涨跌幅:</span> <span style="font-weight: bold; color: ${color};">${change >= 0 ? '+' : ''}${changePercent}%</span>
                         </div>
                         <div style="display: flex; justify-content: space-between;">
-                            <span style="color: #888;">成交量:</span> <span style="font-weight: bold;">${(item.成交量 / 10000).toFixed(2)}万</span>
+                            <span style="color: ${colors.tooltipLabel};">成交量:</span> <span style="font-weight: bold; color: ${colors.tooltipText};">${(item.成交量 / 10000).toFixed(2)}万</span>
                         </div>
                     </div>`;
                     return res;
@@ -125,30 +184,30 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
             },
             legend: {
                 data: ['日K', 'MA5', 'MA10', 'MA20', 'MA60', 'MACD', 'DIFF', 'DEA'],
-                inactiveColor: '#777',
-                textStyle: { color: '#ccc' },
-                bottom: 0,
+                inactiveColor: isDark ? '#555' : '#ccc',
+                textStyle: { color: colors.text, fontSize: 12 },
+                top: '35',
                 tooltip: { show: true }
             },
             axisPointer: { link: [{ xAxisIndex: 'all' }] },
             grid: [
-                { left: '8%', right: '5%', top: '40', height: '48%' },
-                { left: '8%', right: '5%', top: '63%', height: '14%' },
-                { left: '8%', right: '5%', top: '82%', height: '12%' }
+                { left: '8%', right: '5%', top: '50', height: '45%' },
+                { left: '8%', right: '5%', top: '65%', height: '12%' },
+                { left: '8%', right: '5%', top: '85%', height: '10%' }
             ],
             xAxis: [
-                { type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, axisLabel: { color: '#888' }, gridIndex: 0 },
-                { type: 'category', gridIndex: 1, data: dates, axisLabel: { show: false } },
-                { type: 'category', gridIndex: 2, data: dates, axisLabel: { show: false } }
+                { type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false, lineStyle: { color: colors.line } }, splitLine: { show: false }, axisLabel: { color: colors.secondaryText }, gridIndex: 0 },
+                { type: 'category', gridIndex: 1, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: colors.line } } },
+                { type: 'category', gridIndex: 2, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: colors.line } } }
             ],
             yAxis: [
-                { scale: true, splitArea: { show: true }, axisLabel: { color: '#888' }, splitLine: { lineStyle: { color: '#263238' } }, gridIndex: 0 },
+                { scale: true, splitArea: { show: isDark }, axisLabel: { color: colors.secondaryText }, splitLine: { lineStyle: { color: colors.splitLine } }, gridIndex: 0 },
                 { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
                 { scale: true, gridIndex: 2, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } }
             ],
             dataZoom: [
                 { type: 'inside', xAxisIndex: [0, 1, 2], start: 70, end: 100 },
-                { show: true, xAxisIndex: [0, 1, 2], type: 'slider', top: '95%', start: 70, end: 100, textStyle: { color: '#ccc' } }
+                { show: true, xAxisIndex: [0, 1, 2], type: 'slider', top: '95%', start: 70, end: 100, textStyle: { color: colors.secondaryText } }
             ],
             series: [
                 {
@@ -164,10 +223,10 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                     xAxisIndex: 0,
                     yAxisIndex: 0
                 },
-                { name: 'MA5', type: 'line', data: calculateMA(5), smooth: true, lineStyle: { opacity: 0.8, color: '#fff' }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
-                { name: 'MA10', type: 'line', data: calculateMA(10), smooth: true, lineStyle: { opacity: 0.8, color: '#ffea00' }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
-                { name: 'MA20', type: 'line', data: calculateMA(20), smooth: true, lineStyle: { opacity: 0.8, color: '#ff4081' }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
-                { name: 'MA60', type: 'line', data: calculateMA(60), smooth: true, lineStyle: { opacity: 0.8, color: '#00e5ff' }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
+                { name: 'MA5', type: 'line', data: calculateMA(5), smooth: true, itemStyle: { color: isDark ? '#fff' : '#1a1a1a' }, lineStyle: { opacity: 0.8 }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
+                { name: 'MA10', type: 'line', data: calculateMA(10), smooth: true, itemStyle: { color: '#ffea00' }, lineStyle: { opacity: 0.8 }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
+                { name: 'MA20', type: 'line', data: calculateMA(20), smooth: true, itemStyle: { color: '#ff4081' }, lineStyle: { opacity: 0.8 }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
+                { name: 'MA60', type: 'line', data: calculateMA(60), smooth: true, itemStyle: { color: '#00e5ff' }, lineStyle: { opacity: 0.8 }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
                 {
                     name: '成交量',
                     type: 'bar',
@@ -179,20 +238,21 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                     }
                 },
                 {
-                    name: 'MACD',
+                    name: 'MACP', // Corrected name for MACD bar series to avoid legend conflict if needed, though legend item is 'MACD'
                     type: 'bar',
                     xAxisIndex: 2,
                     yAxisIndex: 2,
                     data: macdData.macd,
                     itemStyle: { color: (params: any) => params.data >= 0 ? '#ff5252' : '#00c853' }
                 },
-                { name: 'DIFF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.diff, lineStyle: { color: '#2962ff' }, symbol: 'none' },
-                { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.dea, lineStyle: { color: '#ffab00' }, symbol: 'none' }
+                { name: 'DIFF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.diff, itemStyle: { color: '#2962ff' }, symbol: 'none', lineStyle: { width: 1.5 } },
+                { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.dea, itemStyle: { color: '#ffab00' }, symbol: 'none', lineStyle: { width: 1.5 } }
             ]
         };
 
         myChart.setOption(option);
 
+        // Resize handler
         const handleResize = () => myChart.resize();
         window.addEventListener('resize', handleResize);
 
@@ -200,25 +260,11 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
             window.removeEventListener('resize', handleResize);
             myChart.dispose();
         };
-    }, [data, symbol]);
+    }, [data, symbol, theme]);
 
     return (
         <div style={{ position: 'relative' }}>
             <div ref={chartRef} style={{ width: '100%', height: '600px' }} />
-            <div style={{
-                display: 'flex',
-                gap: '15px',
-                justifyContent: 'center',
-                fontSize: '12px',
-                color: '#888',
-                marginTop: '-20px',
-                paddingBottom: '10px'
-            }}>
-                <span><i style={{ display: 'inline-block', width: '10px', height: '2px', background: '#fff', verticalAlign: 'middle', marginRight: '4px' }}></i>MA5</span>
-                <span><i style={{ display: 'inline-block', width: '10px', height: '2px', background: '#ffea00', verticalAlign: 'middle', marginRight: '4px' }}></i>MA10</span>
-                <span><i style={{ display: 'inline-block', width: '10px', height: '2px', background: '#ff4081', verticalAlign: 'middle', marginRight: '4px' }}></i>MA20</span>
-                <span><i style={{ display: 'inline-block', width: '10px', height: '2px', background: '#00e5ff', verticalAlign: 'middle', marginRight: '4px' }}></i>MA60</span>
-            </div>
         </div>
     );
 };
