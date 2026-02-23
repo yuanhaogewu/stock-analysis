@@ -112,8 +112,14 @@ export default function UserLoginPage() {
             const data = await res.json();
 
             if (res.ok) {
-                setSuccessMessage("注册申请已提交！\n请联系管理员开通正式会员\n联系电话：158-542-69366");
-                setMode('login');
+                setSuccessMessage("注册完成！正在为您跳转到会员开通页面...");
+                // 自动保存用户信息以便进入支付流程
+                if (data.user) {
+                    localStorage.setItem('user_token', JSON.stringify(data.user));
+                    setTimeout(() => router.push('/pay'), 1500);
+                } else {
+                    setMode('login');
+                }
             } else {
                 setErrorMessage(data.detail || '注册失败');
             }

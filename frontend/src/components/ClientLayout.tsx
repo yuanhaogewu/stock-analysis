@@ -170,9 +170,47 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                             <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>
                                 {user?.username || '演示用户'}
                             </div>
-                            <div className="secondary-text">普通成员</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <div
+                                    className="secondary-text"
+                                    style={{
+                                        color: (user?.expires_at && new Date(user.expires_at) > new Date()) ? 'var(--accent-blue)' : '#64748b',
+                                        fontSize: '11px',
+                                        fontWeight: '600'
+                                    }}
+                                >
+                                    {(user?.expires_at && new Date(user.expires_at) > new Date()) ? '🌟 PRO 会员' : '普通成员'}
+                                </div>
+                                {(user?.expires_at && new Date(user.expires_at) > new Date()) && (
+                                    <div style={{ fontSize: '10px', color: '#64748b' }}>
+                                        {new Date(user.expires_at).toLocaleDateString()}到期
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
+
+                    <button
+                        onClick={() => router.push('/pay')}
+                        style={{
+                            width: '100%',
+                            padding: '10px',
+                            marginBottom: '8px',
+                            fontSize: '13px',
+                            background: 'linear-gradient(135deg, var(--accent-blue) 0%, #0056b3 100%)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px'
+                        }}
+                    >
+                        ⚡ 尊享 VIP 特权
+                    </button>
                     <button
                         onClick={handleLogout}
                         className="btn-danger"

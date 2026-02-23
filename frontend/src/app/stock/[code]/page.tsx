@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import KLineChart from "@/components/KLineChart";
 
 interface StockQuote {
@@ -65,6 +66,7 @@ interface NewsItem {
 }
 
 export default function StockDetailPage({ params }: { params: { code: string } }) {
+    const router = useRouter();
     const [quote, setQuote] = useState<StockQuote | null>(null);
     const [kline, setKline] = useState<any[]>([]);
     const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -160,11 +162,22 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         // 3. Fetch AI Analysis (Low Priority, Slow)
         async function fetchAnalysis() {
             try {
-                const res = await fetch(`http://localhost:8000/api/stock/analysis/${params.code}`);
+                const userToken = localStorage.getItem('user_token');
+                let uid = "";
+                if (userToken) {
+                    try { uid = JSON.parse(userToken).id; } catch (e) { }
+                }
+                const res = await fetch(`http://localhost:8000/api/stock/analysis/${params.code}${uid ? `?user_id=${uid}` : ''}`);
                 if (res.ok) {
                     setAnalysis(await res.json());
                 } else if (res.status === 429) {
-                    setError("您查询太频繁了，请稍后再试。");
+                    const data = await res.json();
+                    const detail = data.detail || "";
+                    if (detail.includes("每小时 20 次")) {
+                        setError(`📊 已达到分析限额\n\n${detail}\n\nVip 会员每小时可享 20 次深度诊断权益。如需继续使用，请于解封后重试。`);
+                    } else {
+                        setError(detail || "访问太频繁了，请稍后再试。");
+                    }
                     setLoading(false);
                 } else {
                     const data = await res.json();
@@ -201,10 +214,29 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     );
 
     if (error) return (
-        <div className="card" style={{ padding: '40px', textAlign: 'center', borderColor: 'var(--accent-red)' }}>
-            <h2 style={{ color: 'var(--accent-red)', marginBottom: '16px' }}>数据加载失败</h2>
-            <p style={{ marginBottom: '24px' }}>{error}</p>
-            <button className="btn-primary" onClick={() => window.location.reload()}>重试</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '400px', margin: '100px auto' }}>
+            <div className="card" style={{ padding: '40px', textAlign: 'center', borderColor: 'var(--accent-red)', background: 'rgba(255, 69, 58, 0.05)' }}>
+                <div style={{ fontSize: '48px', marginBottom: '20px' }}>⚠️</div>
+                <h2 style={{ color: 'var(--accent-red)', marginBottom: '16px', fontSize: '20px' }}>加载受限</h2>
+                <div style={{ marginBottom: '24px', color: 'var(--text-primary)', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>{error}</div>
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                    <button className="btn-primary" onClick={() => window.location.reload()} style={{ padding: '10px 24px' }}>重试</button>
+                    <button
+                        onClick={() => router.push('/pay')}
+                        style={{
+                            padding: '10px 24px',
+                            background: 'var(--accent-blue)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontWeight: '600'
+                        }}
+                    >
+                        开通/续费会员
+                    </button>
+                </div>
+            </div>
         </div>
     );
 

@@ -15,48 +15,57 @@ def init_database():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 创建管理员表
+    # 创建套餐表
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS admin (
+        CREATE TABLE IF NOT EXISTS subscription_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # 创建用户表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            phone TEXT,
+            name TEXT NOT NULL,
+            duration_days INTEGER NOT NULL,
+            price REAL NOT NULL,
             is_active INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP NOT NULL
-        )
-    ''')
-    
-    # 创建系统配置表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS system_config (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            config_key TEXT UNIQUE NOT NULL,
-            config_value TEXT NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            description TEXT
         )
     ''')
 
-    # 创建用户自选表
+    # 创建邀请码表
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS watchlist (
+        CREATE TABLE IF NOT EXISTS invite_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            duration_days INTEGER DEFAULT 30,
+            is_used INTEGER DEFAULT 0,
+            used_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            used_at TIMESTAMP,
+            FOREIGN KEY (used_by) REFERENCES users (id)
+        )
+    ''')
+
+    # 创建支付日志表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payment_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            stock_code TEXT NOT NULL,
+            plan_id INTEGER NOT NULL,
+            trade_no TEXT UNIQUE,
+            out_trade_no TEXT UNIQUE NOT NULL,
+            amount REAL NOT NULL,
+            status TEXT DEFAULT 'PENDING',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            paid_at TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id),
-            UNIQUE(user_id, stock_code)
+            FOREIGN KEY (plan_id) REFERENCES subscription_plans (id)
+        )
+    ''')
+
+    # 创建请求频次统计表 (用于每小时20次限制)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS request_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            action_type TEXT NOT NULL, -- e.g., 'analysis'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
     
@@ -69,12 +78,29 @@ def init_database():
         )
     except sqlite3.IntegrityError:
         pass  # 管理员已存在
+
+    # 插入初始套餐 (季度/年度)
+    initial_plans = [
+        ("季度会员", 90, 299.0, "VIP全量功能使用权（90天）"),
+        ("年度会员", 365, 999.0, "VIP全量功能使用权（365天）")
+    ]
+    for name, days, price, desc in initial_plans:
+        try:
+            cursor.execute(
+                "INSERT INTO subscription_plans (name, duration_days, price, description) VALUES (?, ?, ?, ?)",
+                (name, days, price, desc)
+            )
+        except sqlite3.IntegrityError:
+            pass
     
     # 插入默认系统配置
     default_configs = [
         ("deepseek_api_key", os.getenv("DEEPSEEK_API_KEY", "")),
         ("model_id", "deepseek-chat"),
-        ("base_url", "https://api.deepseek.com")
+        ("base_url", "https://api.deepseek.com"),
+        ("alipay_app_id", ""),  # 后续管理员在后台配置
+        ("alipay_private_key", ""),
+        ("alipay_public_key", "")
     ]
     
     for key, value in default_configs:

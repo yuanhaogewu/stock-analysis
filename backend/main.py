@@ -16,6 +16,8 @@ import httpx
 import uuid
 import random
 from pydantic import BaseModel
+from alipay import AliPay
+from alipay.utils import AliPayConfig
 from database import get_db_connection, hash_password, init_database
 
 # Initialize database
@@ -65,6 +67,28 @@ class SystemConfigUpdate(BaseModel):
     api_key: Optional[str] = None
     model_id: Optional[str] = None
     base_url: Optional[str] = None
+    alipay_app_id: Optional[str] = None
+    alipay_private_key: Optional[str] = None
+    alipay_public_key: Optional[str] = None
+
+# New Payment & VIP Models
+class SubscriptionPlanCreate(BaseModel):
+    name: str
+    duration_days: int
+    price: float
+    description: Optional[str] = None
+
+class InviteCodeCreate(BaseModel):
+    duration_days: int = 30
+    count: int = 1
+
+class InviteRedeem(BaseModel):
+    username: str
+    code: str
+
+class PaymentCreate(BaseModel):
+    user_id: int
+    plan_id: int
 
 # Try to load .env manually if exists
 try:
@@ -140,6 +164,44 @@ def is_view_allowed(identifier: str, symbol: str) -> bool:
         _stock_view_history[identifier].append(now)
         _last_view_cache[identifier] = (symbol, now)
         return True
+
+def check_vip_rate_limit(user_id: int) -> dict:
+    """检查VIP会员分析频次 (每小时20次)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 获取过去1小时内的请求记录
+    one_hour_ago = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        "SELECT COUNT(*) FROM request_logs WHERE user_id = ? AND action_type = 'analysis' AND created_at > ?",
+        (user_id, one_hour_ago)
+    )
+    count = cursor.fetchone()[0]
+    
+    # 检查是否有限制
+    limit = 20
+    if count >= limit:
+        # 查找最早的一条记录，计算解封时间
+        cursor.execute(
+            "SELECT created_at FROM request_logs WHERE user_id = ? AND action_type = 'analysis' AND created_at > ? ORDER BY created_at ASC LIMIT 1",
+            (user_id, one_hour_ago)
+        )
+        oldest = cursor.fetchone()[0]
+        # 解封时间 = 最早记录时间 + 1小时
+        oldest_dt = datetime.datetime.strptime(oldest, "%Y-%m-%d %H:%M:%S")
+        resume_time = (oldest_dt + datetime.timedelta(hours=1)).strftime("%H:%M:%S")
+        
+        conn.close()
+        return {"allowed": False, "count": count, "limit": limit, "resume_at": resume_time}
+    
+    # 记录本次请求
+    cursor.execute(
+        "INSERT INTO request_logs (user_id, action_type) VALUES (?, 'analysis')",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
+    return {"allowed": True, "count": count + 1, "limit": limit}
 
 def generate_captcha_svg(code: str):
     width = 100
@@ -671,10 +733,36 @@ async def get_deepseek_analysis(prompt: str):
 
 @app.get("/api/stock/analysis/{symbol}")
 async def analyze_stock(symbol: str, request: Request, background_tasks: BackgroundTasks, user_id: Optional[int] = None):
-    """AI 深层诊断（计入详情页查询限额）"""
+    """AI 深层诊断（计入详情页查询限额 + VIP频次限制）"""
     identifier = str(user_id) if user_id else (request.client.host if request.client else "unknown")
     if not is_view_allowed(identifier, symbol):
-        raise HTTPException(status_code=429, detail=f"您查询股票详情页太频繁了(识别码:{identifier})，请一小时后再试。")
+        raise HTTPException(status_code=429, detail=f"您查询股票详情页太频繁了，请一小时后再试。")
+
+    # 1. 强制登录与权限检查
+    if not user_id:
+        raise HTTPException(status_code=403, detail="智能诊断是 VIP 会员专属权益，请先登录账户。")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT expires_at, is_active FROM users WHERE id = ?", (user_id,))
+    user_record = cursor.fetchone()
+    conn.close()
+    
+    if not user_record or not user_record['is_active']:
+        raise HTTPException(status_code=403, detail="用户不存在或已被禁用，请联系管理员。")
+    
+    now_dt = datetime.datetime.now()
+    expiry_dt = datetime.datetime.strptime(user_record['expires_at'], "%Y-%m-%d %H:%M:%S")
+    if expiry_dt <= now_dt:
+        raise HTTPException(status_code=403, detail="您的智能分析权益已消耗或已到期，请前往‘会员中心’续费开通。")
+
+    # 2. VIP 频次限制检查 (每小时20次)
+    status = check_vip_rate_limit(user_id)
+    if not status["allowed"]:
+        raise HTTPException(
+            status_code=429, 
+            detail=f"您已达到每小时 {status['limit']} 次分析的限制。请于 {status['resume_at']} 后继续。"
+        )
 
     # 1. 获取基础数据
     quote = await _get_stock_quote_core(symbol, background_tasks)
@@ -1106,25 +1194,25 @@ async def update_system_config(config: SystemConfigUpdate):
     """更新系统配置"""
     conn = get_db_connection()
     cursor = conn.cursor()
+
     
-    if config.api_key is not None:
-        cursor.execute(
-            "UPDATE system_config SET config_value = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'deepseek_api_key'",
-            (config.api_key,)
-        )
-        os.environ["DEEPSEEK_API_KEY"] = config.api_key
+    updates = {
+        'deepseek_api_key': config.api_key,
+        'model_id': config.model_id,
+        'base_url': config.base_url,
+        'alipay_app_id': config.alipay_app_id,
+        'alipay_private_key': config.alipay_private_key,
+        'alipay_public_key': config.alipay_public_key
+    }
     
-    if config.model_id is not None:
-        cursor.execute(
-            "UPDATE system_config SET config_value = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'model_id'",
-            (config.model_id,)
-        )
-    
-    if config.base_url is not None:
-        cursor.execute(
-            "UPDATE system_config SET config_value = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'base_url'",
-            (config.base_url,)
-        )
+    for k, v in updates.items():
+        if v is not None:
+            cursor.execute(
+                "UPDATE system_config SET config_value = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = ?",
+                (v, k)
+            )
+            if k == 'deepseek_api_key':
+                os.environ["DEEPSEEK_API_KEY"] = v
     
     conn.commit()
     conn.close()
@@ -1215,21 +1303,30 @@ async def user_register(user: UserRegister):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 默认注册用户为禁用状态（is_active=0），有效期设为一年（需管理员开通）
-    expires_at = (datetime.datetime.now() + datetime.timedelta(days=365)).isoformat()
+    # 注册用户先设为激活，但有效期为现在（即已到期，需前往支付）
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hashed_password = hash_password(user.password)
     
     try:
         cursor.execute(
-            "INSERT INTO users (username, password, phone, is_active, expires_at) VALUES (?, ?, ?, 0, ?)",
-            (user.username, hashed_password, user.phone, expires_at)
+            "INSERT INTO users (username, password, phone, is_active, expires_at) VALUES (?, ?, ?, 1, ?)",
+            (user.username, hashed_password, user.phone, now_str)
         )
         conn.commit()
+        user_id = cursor.lastrowid
         conn.close()
-        return {"success": True, "message": "请联系开发者开通正式会员\n联系电话：158-542-69366"}
+        return {
+            "success": True, 
+            "message": "注册成功，请选择会员套餐以开通全量功能",
+            "user": {
+                "id": user_id,
+                "username": user.username,
+                "expires_at": now_str
+            }
+        }
     except Exception as e:
         conn.close()
-        raise HTTPException(status_code=400, detail="用户名已存在，请换一个试试")
+        raise HTTPException(status_code=400, detail="用户名已存在，请换一个重试")
 
 # ==================== 用户密码重置 API ====================
 
@@ -1387,3 +1484,272 @@ async def get_influential_news(symbol: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# --- Payment & VIP Routes ---
+
+def get_alipay_client():
+    """从数据库读取配置并初始化支付宝客户端"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT config_key, config_value FROM system_config WHERE config_key LIKE 'alipay_%'")
+    configs = {row['config_key']: row['config_value'] for row in cursor.fetchall()}
+    conn.close()
+    
+    app_id = configs.get("alipay_app_id")
+    app_private_key = configs.get("alipay_private_key")
+    alipay_public_key = configs.get("alipay_public_key")
+    
+    if not app_id or not app_private_key or not alipay_public_key:
+        return None
+        
+    return AliPay(
+        appid=app_id,
+        app_notify_url=None,
+        app_private_key_string=app_private_key,
+        alipay_public_key_string=alipay_public_key,
+        sign_type="RSA2",
+        debug=True # 沙箱模式建议开启，正式环境建议关闭
+    )
+
+@app.get("/api/subscription/plans")
+async def get_plans():
+    """获取所有可用订阅套餐"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM subscription_plans WHERE is_active = 1")
+    plans = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return plans
+
+@app.post("/api/payment/create")
+async def create_payment(data: PaymentCreate):
+    """发起支付宝支付"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1. 检查套餐
+    cursor.execute("SELECT * FROM subscription_plans WHERE id = ?", (data.plan_id,))
+    plan = cursor.fetchone()
+    if not plan:
+        conn.close()
+        raise HTTPException(status_code=404, detail="套餐不存在")
+    
+    # 2. 生成订单号
+    out_trade_no = f"STK_{data.user_id}_{int(time.time())}_{random.randint(100, 999)}"
+    
+    # 3. 写入支付日志
+    cursor.execute(
+        "INSERT INTO payment_logs (user_id, plan_id, out_trade_no, amount) VALUES (?, ?, ?, ?)",
+        (data.user_id, data.plan_id, out_trade_no, plan['price'])
+    )
+    conn.commit()
+    conn.close()
+    
+    # 4. 调用支付宝
+    alipay = get_alipay_client()
+    if not alipay:
+        # 如果未配置支付宝，返回模拟支付演示
+        return {
+            "mode": "mock", 
+            "out_trade_no": out_trade_no, 
+            "message": "系统未配置正式支付宝密钥，请联系管理员。下方为模拟支付流程。",
+            "url": f"/payment/mock?no={out_trade_no}"
+        }
+    
+    # 正式环境跳转
+    order_string = alipay.api_alipay_trade_page_pay(
+        out_trade_no=out_trade_no,
+        total_amount=plan['price'],
+        subject=f"股票分析工具 - {plan['name']}",
+        return_url="http://localhost:3002/payment/success",
+        notify_url="http://your-server-domain.com/api/payment/callback"
+    )
+    
+    pay_url = f"https://openapi.alipaydev.com/gateway.do?{order_string}" if alipay.debug else f"https://openapi.alipay.com/gateway.do?{order_string}"
+    return {"mode": "alipay", "url": pay_url}
+
+@app.post("/api/payment/callback")
+async def payment_callback(request: Request):
+    """支付宝异步回调 (Webhook)"""
+    data = await request.form()
+    data = dict(data)
+    if "sign" not in data: return "error"
+    signature = data.pop("sign")
+    
+    alipay = get_alipay_client()
+    if not alipay: return "error"
+    
+    # 验证签名
+    success = alipay.verify(data, signature)
+    if success and data.get("trade_status") in ("TRADE_SUCCESS", "TRADE_FINISHED"):
+        out_trade_no = data.get("out_trade_no")
+        trade_no = data.get("trade_no")
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. 查询订单
+        cursor.execute("SELECT * FROM payment_logs WHERE out_trade_no = ?", (out_trade_no,))
+        log = cursor.fetchone()
+        if log and log['status'] == 'PENDING':
+            # 2. 获取套餐时长
+            cursor.execute("SELECT duration_days FROM subscription_plans WHERE id = ?", (log['plan_id'],))
+            plan = cursor.fetchone()
+            days = plan['duration_days']
+            
+            # 3. 更新支付状态
+            cursor.execute(
+                "UPDATE payment_logs SET status = 'PAID', trade_no = ?, paid_at = ? WHERE out_trade_no = ?",
+                (trade_no, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), out_trade_no)
+            )
+            
+            # 4. 延长会员有效期
+            cursor.execute("SELECT expires_at FROM users WHERE id = ?", (log['user_id'],))
+            user = cursor.fetchone()
+            current_expiry = datetime.datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S")
+            # 如果已过期，从现在开始加；如果未过期，在原基础上加
+            start_date = max(current_expiry, datetime.datetime.now())
+            new_expiry = (start_date + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor.execute("UPDATE users SET expires_at = ?, is_active = 1 WHERE id = ?", (new_expiry, log['user_id']))
+            conn.commit()
+            
+        conn.close()
+        return "success"
+    return "error"
+
+@app.post("/api/invite/redeem")
+async def redeem_invite(data: InviteRedeem):
+    """通过邀请码兑换会员"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1. 获取用户
+    cursor.execute("SELECT id, expires_at FROM users WHERE username = ?", (data.username,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="用户不存在")
+        
+    # 2. 检查邀请码
+    cursor.execute("SELECT * FROM invite_codes WHERE code = ? AND is_used = 0", (data.code,))
+    code_entry = cursor.fetchone()
+    if not code_entry:
+        conn.close()
+        raise HTTPException(status_code=400, detail="口令无效或已被使用")
+        
+    # 3. 更新邀请码状态
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        "UPDATE invite_codes SET is_used = 1, used_by = ?, used_at = ? WHERE code = ?",
+        (user['id'], now_str, data.code)
+    )
+    
+    # 4. 延长有效期
+    current_expiry = datetime.datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S")
+    start_date = max(current_expiry, datetime.datetime.now())
+    new_expiry = (start_date + datetime.timedelta(days=code_entry['duration_days'])).strftime("%Y-%m-%d %H:%M:%S")
+    
+    cursor.execute("UPDATE users SET expires_at = ?, is_active = 1 WHERE id = ?", (new_expiry, user['id']))
+    conn.commit()
+    conn.close()
+    
+    return {"message": "兑换成功！", "new_expiry": new_expiry}
+
+# --- Admin Management for Subs ---
+
+@app.get("/api/admin/subscription/plans")
+async def admin_get_plans():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM subscription_plans")
+    plans = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return plans
+
+@app.post("/api/admin/subscription/plans")
+async def admin_add_plan(plan: SubscriptionPlanCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO subscription_plans (name, duration_days, price, description) VALUES (?, ?, ?, ?)",
+        (plan.name, plan.duration_days, plan.price, plan.description)
+    )
+    conn.commit()
+    conn.close()
+    return {"message": "套餐添加成功"}
+
+@app.post("/api/admin/invite/generate")
+async def admin_generate_invites(data: InviteCodeCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    generated_codes = []
+    for _ in range(data.count):
+        code = f"VIP-{uuid.uuid4().hex[:8].upper()}"
+        cursor.execute(
+            "INSERT INTO invite_codes (code, duration_days) VALUES (?, ?)",
+            (code, data.duration_days)
+        )
+        generated_codes.append(code)
+    conn.commit()
+    conn.close()
+    return {"codes": generated_codes}
+@app.get("/api/admin/invite/codes")
+async def admin_get_invites():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # 关联查询使用者用户名
+    cursor.execute("""
+        SELECT ic.*, u.username as used_by_name 
+        FROM invite_codes ic 
+        LEFT JOIN users u ON ic.used_by = u.id 
+        ORDER BY ic.created_at DESC
+    """)
+    codes = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return codes
+@app.get("/api/admin/payment/logs")
+async def admin_get_payment_logs():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pl.*, u.username, sp.name as plan_name 
+        FROM payment_logs pl
+        JOIN users u ON pl.user_id = u.id
+        JOIN subscription_plans sp ON pl.plan_id = sp.id
+        ORDER BY pl.created_at DESC
+    """)
+    logs = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return logs
+
+# --- Mock Payment Endpoints (For local testing without key) ---
+@app.get("/api/payment/mock_confirm")
+async def mock_confirm(out_trade_no: str):
+    """手动触发模拟支付成功 (仅供本地开发使用)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM payment_logs WHERE out_trade_no = ?", (out_trade_no,))
+    log = cursor.fetchone()
+    if log and log['status'] == 'PENDING':
+        cursor.execute("SELECT duration_days FROM subscription_plans WHERE id = ?", (log['plan_id'],))
+        plan = cursor.fetchone()
+        days = plan['duration_days']
+        
+        cursor.execute(
+            "UPDATE payment_logs SET status = 'PAID', trade_no = ?, paid_at = ? WHERE out_trade_no = ?",
+            (f"MOCK_{uuid.uuid4().hex[:10]}", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), out_trade_no)
+        )
+        
+        cursor.execute("SELECT expires_at FROM users WHERE id = ?", (log['user_id'],))
+        user = cursor.fetchone()
+        current_expiry = datetime.datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S")
+        start_date = max(current_expiry, datetime.datetime.now())
+        new_expiry = (start_date + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        
+        cursor.execute("UPDATE users SET expires_at = ?, is_active = 1 WHERE id = ?", (new_expiry, log['user_id']))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": f"已手动确认支付，续费 {days} 天", "new_expiry": new_expiry}
+    conn.close()
+    return {"success": False, "message": "订单不存在或已处理"}
