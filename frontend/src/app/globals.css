@@ -13,6 +13,7 @@
   --radius-lg: 18px;
   --shadow-soft: 0 4px 12px rgba(0, 0, 0, 0.05);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --bg-modal: #ffffff;
   --transition-std: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
@@ -23,6 +24,7 @@
   --text-primary: #ffffff;
   --text-secondary: #8e8e93;
   --border-color: rgba(255, 255, 255, 0.1);
+  --bg-modal: #1c1c1e;
   --shadow-soft: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 

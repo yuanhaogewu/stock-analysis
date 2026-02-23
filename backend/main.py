@@ -16,6 +16,9 @@ import httpx
 import uuid
 import random
 from pydantic import BaseModel
+from fastapi import File, UploadFile
+from fastapi.staticfiles import StaticFiles
+import shutil
 from alipay import AliPay
 from alipay.utils import AliPayConfig
 from database import get_db_connection, hash_password, init_database
@@ -48,6 +51,7 @@ class UserRegister(BaseModel):
     phone: str
     captcha_id: Optional[str] = None
     captcha_code: Optional[str] = None
+    referral_code: Optional[str] = None
 
 class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
@@ -63,6 +67,13 @@ class UserForgotPasswordReset(BaseModel):
     phone: str
     new_password: str
 
+class UserProfileUpdate(BaseModel):
+    username: Optional[str] = None
+    avatar: Optional[str] = None
+    phone: Optional[str] = None
+    old_password: Optional[str] = None
+    new_password: Optional[str] = None
+
 class SystemConfigUpdate(BaseModel):
     api_key: Optional[str] = None
     model_id: Optional[str] = None
@@ -70,6 +81,21 @@ class SystemConfigUpdate(BaseModel):
     alipay_app_id: Optional[str] = None
     alipay_private_key: Optional[str] = None
     alipay_public_key: Optional[str] = None
+    platform_name: Optional[str] = None
+    platform_name_en: Optional[str] = None
+    platform_slogan: Optional[str] = None
+    platform_logo: Optional[str] = None
+    dev_name: Optional[str] = None
+    dev_phone: Optional[str] = None
+    dev_email: Optional[str] = None
+    dev_wechat_qr: Optional[str] = None
+    announcement_content: Optional[str] = None
+    rate_limit_rules: Optional[str] = None
+    rate_limit_msg: Optional[str] = None
+    alert_msg_auth_required: Optional[str] = None
+    alert_msg_vip_expired: Optional[str] = None
+    rate_limit_count: Optional[str] = None
+    rate_limit_period: Optional[str] = None
 
 # New Payment & VIP Models
 class SubscriptionPlanCreate(BaseModel):
@@ -77,6 +103,7 @@ class SubscriptionPlanCreate(BaseModel):
     duration_days: int
     price: float
     description: Optional[str] = None
+    sort_order: Optional[int] = 0
 
 class InviteCodeCreate(BaseModel):
     duration_days: int = 30
@@ -106,6 +133,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MindNode Base API")
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -170,29 +198,37 @@ def check_vip_rate_limit(user_id: int) -> dict:
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 获取过去1小时内的请求记录
-    one_hour_ago = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    # 获取频控配置
+    cursor.execute("SELECT config_value FROM system_config WHERE config_key = 'rate_limit_count'")
+    limit_row = cursor.fetchone()
+    limit = int(limit_row['config_value']) if limit_row else 20
+    
+    cursor.execute("SELECT config_value FROM system_config WHERE config_key = 'rate_limit_period'")
+    period_row = cursor.fetchone()
+    period_hours = int(period_row['config_value']) if period_row else 1
+    
+    # 获取过去指定周期内的请求记录
+    period_ago = (datetime.datetime.now() - datetime.timedelta(hours=period_hours)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute(
         "SELECT COUNT(*) FROM request_logs WHERE user_id = ? AND action_type = 'analysis' AND created_at > ?",
-        (user_id, one_hour_ago)
+        (user_id, period_ago)
     )
     count = cursor.fetchone()[0]
     
     # 检查是否有限制
-    limit = 20
     if count >= limit:
         # 查找最早的一条记录，计算解封时间
         cursor.execute(
             "SELECT created_at FROM request_logs WHERE user_id = ? AND action_type = 'analysis' AND created_at > ? ORDER BY created_at ASC LIMIT 1",
-            (user_id, one_hour_ago)
+            (user_id, period_ago)
         )
         oldest = cursor.fetchone()[0]
-        # 解封时间 = 最早记录时间 + 1小时
+        # 解封时间 = 最早记录时间 + 指定周期
         oldest_dt = datetime.datetime.strptime(oldest, "%Y-%m-%d %H:%M:%S")
-        resume_time = (oldest_dt + datetime.timedelta(hours=1)).strftime("%H:%M:%S")
+        resume_time = (oldest_dt + datetime.timedelta(hours=period_hours)).strftime("%H:%M:%S")
         
         conn.close()
-        return {"allowed": False, "count": count, "limit": limit, "resume_at": resume_time}
+        return {"allowed": False, "count": count, "limit": limit, "resume_at": resume_time, "period_hours": period_hours}
     
     # 记录本次请求
     cursor.execute(
@@ -696,7 +732,8 @@ async def get_deepseek_analysis(prompt: str):
     if not api_key:
         api_key = os.getenv("DEEPSEEK_API_KEY")
     
-    if not api_key: return None
+    if not api_key: 
+        raise ValueError("DeepSeek API Key 未配置")
     
     # Ensure URL is correctly formatted
     if not base_url.endswith("/"): base_url += "/"
@@ -709,7 +746,19 @@ async def get_deepseek_analysis(prompt: str):
     payload = {
         "model": model_id,
         "messages": [
-            {"role": "system", "content": "你是一名专业的A股人工智能投资顾问。你的分析必须基于数据，遵循‘讲人话、用逻辑代替情绪、条件触发建议、充分风险提示’的原则。请直接输出合法的JSON格式结果，不要包含Markdown代码块。"},
+            {"role": "system", "content": """你是一名专业的A股人工智能投资顾问。你的分析必须基于数据，遵循‘讲人话、用逻辑代替情绪、条件触发建议、充分风险提示’的原则。
+
+【特别要求：一句话结论（short_summary）必须使用股市新手、普通股民能秒懂的直白语言，避免生涩的金融术语。】
+
+【特别要求：关于 K 线信号点（chart_signals），请不要随意对过去已经发生的价格标注“买”或“卖”，这种事后诸葛亮的标注对股民没有参考价值。请标注那些具有“逻辑解释力”的关键转折点、阻力突破位或支撑回升点。类型统一使用 "signal"，标题描述应简洁（如：突破60日线、放量探底回升等）。】
+
+你的分析务必包含四个层面：
+1. 核心结论（short_summary, detailed_summary）
+2. 多周期趋势（trend_judgment）：包含短期、中期、长期。
+3. 操盘建议（trading_plan）：明确买入点、卖出点和仓位。
+4. K线信号点（chart_signals）：提供2-3个关键点，标注那些能辅助判断当前局势的历史关键位置，格式为 {"date": "YYYY-MM-DD", "type": "signal", "price": float, "title": "简短原因"}。
+
+请直接输出合法的JSON格式结果。"""},
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"},
@@ -717,7 +766,8 @@ async def get_deepseek_analysis(prompt: str):
     }
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Increase timeout to 60s for more stable analysis
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code == 200:
                 content = resp.json()['choices'][0]['message']['content']
@@ -726,10 +776,14 @@ async def get_deepseek_analysis(prompt: str):
                     content = content.split("```json")[-1].split("```")[0]
                 return json.loads(content)
             else:
-                logger.error(f"DeepSeek API Error: {resp.status_code} - {resp.text}")
+                error_msg = f"DeepSeek API Error: {resp.status_code}"
+                logger.error(f"{error_msg} - {resp.text}")
+                raise RuntimeError(error_msg)
+    except httpx.TimeoutException:
+        raise TimeoutError("AI 接口响应超时")
     except Exception as e:
         logger.error(f"DeepSeek call error: {e}")
-    return None
+        raise e
 
 @app.get("/api/stock/analysis/{symbol}")
 async def analyze_stock(symbol: str, request: Request, background_tasks: BackgroundTasks, user_id: Optional[int] = None):
@@ -738,35 +792,54 @@ async def analyze_stock(symbol: str, request: Request, background_tasks: Backgro
     if not is_view_allowed(identifier, symbol):
         raise HTTPException(status_code=429, detail=f"您查询股票详情页太频繁了，请一小时后再试。")
 
-    # 1. 强制登录与权限检查
-    if not user_id:
-        raise HTTPException(status_code=403, detail="智能诊断是 VIP 会员专属权益，请先登录账户。")
-    
+    # 获取动态提示配置
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT config_key, config_value FROM system_config WHERE config_key LIKE 'alert_msg_%' OR config_key = 'rate_limit_msg'")
+    config_dict = {row['config_key']: row['config_value'] for row in cursor.fetchall()}
+    
+    # 1. 强制登录与权限检查
+    if not user_id:
+        msg = config_dict.get('alert_msg_auth_required', "智能诊断是 VIP 会员专属权益，请先登录账户。")
+        raise HTTPException(status_code=403, detail=msg)
+    
     cursor.execute("SELECT expires_at, is_active FROM users WHERE id = ?", (user_id,))
     user_record = cursor.fetchone()
-    conn.close()
     
     if not user_record or not user_record['is_active']:
         raise HTTPException(status_code=403, detail="用户不存在或已被禁用，请联系管理员。")
     
     now_dt = datetime.datetime.now()
-    expiry_dt = datetime.datetime.strptime(user_record['expires_at'], "%Y-%m-%d %H:%M:%S")
+    try:
+        if 'T' in user_record['expires_at']:
+            expiry_dt = datetime.datetime.fromisoformat(user_record['expires_at'].replace('Z', ''))
+        else:
+            expiry_dt = datetime.datetime.strptime(user_record['expires_at'], "%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        logger.error(f"Date parsing error: {user_record['expires_at']} - {e}")
+        expiry_dt = now_dt - datetime.timedelta(days=1)
+        
+    is_vip = True
     if expiry_dt <= now_dt:
-        raise HTTPException(status_code=403, detail="您的智能分析权益已消耗或已到期，请前往‘会员中心’续费开通。")
-
-    # 2. VIP 频次限制检查 (每小时20次)
-    status = check_vip_rate_limit(user_id)
-    if not status["allowed"]:
-        raise HTTPException(
-            status_code=429, 
-            detail=f"您已达到每小时 {status['limit']} 次分析的限制。请于 {status['resume_at']} 后继续。"
-        )
+        is_vip = False
+        # 如果不是 VIP，我们直接跳过 AI 请求和频控检查，返回脱敏数据
+        # 但我们仍然需要基础数据来填充 response 结构
+    else:
+        # 2. VIP 频次限制检查 (仅对有效 VIP 计费)
+        status = check_vip_rate_limit(user_id)
+        if not status["allowed"]:
+            msg_tpl = config_dict.get('rate_limit_msg', "您已达到每小时 {limit} 次分析的限制。请于 {resume_at} 后继续。")
+            detail_msg = msg_tpl.replace("{limit}", str(status["limit"])).replace("{resume_at}", status["resume_at"])
+            conn.close()
+            raise HTTPException(status_code=429, detail=detail_msg)
+    
+    conn.close()
 
     # 1. 获取基础数据
     quote = await _get_stock_quote_core(symbol, background_tasks)
     df = await get_cached_kline(symbol)
+    
+    # ... (原有指标计算逻辑保持不变，确保指标显示正常)
     
     # 提取实时指标
     pe = quote.get("市盈率") or quote.get("PE", 20.0)
@@ -789,7 +862,14 @@ async def analyze_stock(symbol: str, request: Request, background_tasks: Backgro
     # 估算派生指标
     eps = round(price / pe, 2) if pe > 0 else 0.5
     roe = round((pb / pe) * 100, 2) if pe > 0 else 12.0
-    debt_ratio = quote.get("负债率", 45.0) # 保持默认或从别处获取
+    debt_ratio = quote.get("负债率", 45.0)
+    
+    # 新增行业标签获取 (EM 接口通常包含行业信息)
+    industry = "通用行业"
+    try:
+        # 尝试从 quote 中提取，部分接口把行业放在名称后面或者特定字段
+        industry = quote.get("行业", "智能科技")
+    except: pass
     
     if df is None or len(df) < 30: 
         return {
@@ -836,211 +916,135 @@ async def analyze_stock(symbol: str, request: Request, background_tasks: Backgro
     price_change = (last['收盘'] - prev['收盘']) / prev['收盘']
     
     # 构建 AI 提示词
-    ai_prompt = f"""
-    分析标的: {quote.get('名称', symbol)} ({symbol})
-    当前价格: {price:.2f}
-    涨跌幅: {price_change*100:.2f}%
-    量比: {vol_ratio:.2f}
-    技术参数:
-    - MA5/10/20: {last['ma5']:.2f}/{last['ma10']:.2f}/{last['ma20']:.2f}
-    - 收盘价: {last['收盘']:.2f}
-    - 成交量对比: 今日 {last['成交量']:.0f}, 5日均量 {last['vol_ma5']:.0f}
-    - 核心财务数据: PE: {pe}, PB: {pb}, ROE: {roe}%, EPS: {eps}
-    
-    请输出严格符合以下格式的JSON诊断报告：
-    {{
-        "short_summary": "极简扼要的一句话结论，如'跌得很惨，机构在跑，短期别碰'，需犀利精准",
-        "detailed_summary": "更详细的深度解释，涵盖走势、资金、技术面分值、业绩及风险提示",
-        "score": 0-100之间的整数评分,反映资金强度,
-        "tech_status": "描述趋势、量能、强弱",
-        "main_force": {{
-            "inference": "资金介入概率推断",
-            "stage": "当前阶段(如吸筹、拉升、派发)",
-            "evidence": ["证据1", "证据2", "证据3"]
-        }},
-        "trading_plan": {{
-            "buy": "基于'如果...那么...'表达的进入点",
-            "sell": "带条件的离场/止损点",
-            "position": "仓位建议"
-        }},
-        "scenarios": {{
-            "optimistic": "乐观路径",
-            "neutral": "中性路径",
-            "pessimistic": "悲观路径"
-        }},
+    prompt = f"""
+分析标的: {quote.get('名称', symbol)} ({symbol})
+当前价格: {price}，昨收价: {prev_close}，今日涨跌幅: {quote_change}%
+核心指标: PE={pe}, PB={pb}, ROE={roe}%, EPS={eps}, 负债率={debt_ratio}%
+所属行业: {industry}
+最近30日K线数据: {df[['日期', '收盘']].tail(30).to_dict()}
+
+请输出严格符合以下 JSON 格式的专业诊断报告：
+{{
+    "short_summary": "极简核心结论(15字内)",
+    "detailed_summary": "深度逻辑分析(涵盖技术面、资金面、基本面)",
+    "signal": "Buy"|"Sell"|"Neutral",
+    "intensity": 0-100之间的整数评分,
+    "structured_analysis": {{
+        "tech_status": "当前技术形态描述",
+        "main_force": {{"stage": "阶段", "inference": "主力强度", "evidence": ["点1", "点2"]}},
+        "trading_plan": {{"buy": "买点", "sell": "卖点", "position": "仓位"}},
+        "scenarios": {{"optimistic": "乐观", "neutral": "中性", "pessimistic": "悲观"}},
         "trend_judgment": [
-            {{"period": "短期 (7天)", "trend": "趋势词(如强势上涨/振荡整理)", "explanation": "简短说明"}},
-            {{"period": "中期 (1个月)", "trend": "趋势词", "explanation": "简短说明"}},
-            {{"period": "长期 (半年以上)", "trend": "趋势词", "explanation": "简短说明"}}
+            {{"period": "短期 (7天)", "trend": "趋势", "explanation": "理由"}},
+            {{"period": "中期 (1个月)", "trend": "趋势", "explanation": "理由"}},
+            {{"period": "长期 (半年以上)", "trend": "趋势", "explanation": "理由"}}
+        ],
+        "chart_signals": [
+            {{"date": "YYYY-MM-DD", "type": "buy"|"sell", "price": 0.0, "title": "理由"}}
         ]
+    }},
+    "indicators": {{
+        "vol_ratio": {round(vol_ratio, 2)},
+        "price_change": {quote_change},
+        "pe": {pe},
+        "pb": {pb},
+        "roe": {roe},
+        "eps": {eps},
+        "debt_ratio": {debt_ratio},
+        "revenue_growth": 15.2,
+        "net_profit_margin": 8.5
     }}
-    """
+}}
+"""
+    analysis = None
+    analysis_error = "AI 分析服务暂不可用"
     
-    try:
-        ai_analysis = await get_deepseek_analysis(ai_prompt)
-    except Exception as e:
-        logger.error(f"DeepSeek analysis failed exception: {e}")
-        ai_analysis = None
-
-    if ai_analysis and isinstance(ai_analysis, dict):
-        # 使用 AI 返回的评分，或根据关键词兜底
-        ai_score = ai_analysis.get("score")
-        if ai_score is None:
-            ai_score = 75 if ai_analysis.get("main_force", {}).get("stage") in ["拉升", "突破"] else 50
-        
-        if "trend_judgment" not in ai_analysis:
-            fallback_explanation = ai_analysis.get("short_summary") or ai_analysis.get("conclusion") or "趋势观察中"
-            ai_analysis["trend_judgment"] = [
-                {"period": "短期 (7天)", "trend": ai_analysis.get("main_force", {}).get("stage", "震荡整理"), "explanation": fallback_explanation},
-                {"period": "中期 (1个月)", "trend": "方向不明", "explanation": "中期趋势受制于市场整体环境。"},
-                {"period": "长期 (半年以上)", "trend": "价值评估", "explanation": "建议结合年度财报进一步分析。"}
-            ]
-        
-        # 兜底兼容旧版 conclusion 字段
-        if "conclusion" not in ai_analysis:
-            ai_analysis["conclusion"] = ai_analysis.get("short_summary", "AI 诊断已生成")
-
-        return {
-            "symbol": symbol,
-            "advice": (ai_analysis.get("short_summary", "")[:15] + "...") if ai_analysis.get("short_summary") else "AI 诊断已生成",
-            "signal": "Buy" if ai_score >= 65 else ("Sell" if ai_score <= 35 else "Neutral"),
-            "intensity": ai_score,
-            "main_force": f"AI 诊断: {ai_analysis.get('main_force', {}).get('stage', '分析中')}",
-            "detail_advice": "DeepSeek 智能诊断已生成",
-            "structured_analysis": ai_analysis,
-            "indicators": {
-                "vol_ratio": round(vol_ratio, 2),
-                "price_change": round(price_change * 100, 2),
-                "pe": pe,
-                "pb": pb,
-                "roe": roe,
-                "eps": eps,
-                "debt_ratio": debt_ratio,
-                "dividend_yield": 3.2,
-                "ps_ratio": 2.5,
-                "revenue_growth": 15.6
-            }
-        }
-
-    # ================= Fallback to Local Engine (Enhanced) =================
-    # 1. 计算技术指标
-    # RSI
-    delta = df['收盘'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    rsi = df['rsi'].iloc[-1]
-    
-    # MACD
-    exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
-    exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
-    df['macd'] = exp1 - exp2
-    df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
-    df['hist'] = df['macd'] - df['signal_line']
-    macd_hist = df['hist'].iloc[-1]
-    
-    # 2. 综合评分逻辑 (0-100)
-    score = 50
-    reasons = []
-    
-    # 趋势分 (MA)
-    if last['ma5'] > last['ma10'] > last['ma20']:
-        score += 15
-        reasons.append("均线多头排列")
-    elif last['ma5'] < last['ma10'] < last['ma20']:
-        score -= 15
-        reasons.append("均线空头排列")
-    
-    # 动能分 (RSI)
-    if rsi > 70:
-        score -= 5 # 超买风险
-        reasons.append("RSI处于超买区")
-    elif rsi < 30:
-        score += 10 # 超跌反弹机会
-        reasons.append("RSI处于超跌区")
-    elif rsi > 50 and rsi > df['rsi'].iloc[-2]:
-        score += 5
-        reasons.append("多头动能增强")
-        
-    # 指标分 (MACD)
-    macd_score = max(min(macd_hist * 20, 15), -15) # 映射 MACD 柱状图高度到分值
-    score += macd_score
-    if macd_hist > 0:
-        reasons.append("MACD金叉区域" if macd_score > 0 else "MACD红柱缩短")
+    if is_vip:
+        try:
+            analysis = await get_deepseek_analysis(prompt)
+        except ValueError as e:
+            analysis_error = str(e)
+        except TimeoutError as e:
+            analysis_error = str(e)
+        except Exception as e:
+            analysis_error = "AI 诊断引擎故障"
     else:
-        reasons.append("MACD死叉区域")
-        
-    # 成交量与波动分 (量价贡献)
-    vol_contribution = (vol_ratio - 1) * 10 # 量比越大贡献越多
-    price_contribution = price_change * 100 # 涨跌幅直接贡献
-    score += max(min(vol_contribution + price_contribution, 20), -20)
-    
-    if vol_ratio > 1.2:
-        reasons.append("成交放量" if last['收盘'] > prev['收盘'] else "放量下跌")
-            
-    # 3. 最终结果生成
-    # 增加随机微扰使数据看起来更自然
-    import random
-    score += random.uniform(-2.0, 2.0)
-    
-    score = round(max(min(score, 98), 2), 1)
-    intensity = score
-    
-    if intensity >= 65:
-        signal = "Buy"
-        stage = "强力拉升"
-        short_summary = "多头占优，放量突破，建议持股。"
-        detailed_summary = f"该股近期表现强劲，{reasons[0] if reasons else '成交量显著放大'}。技术面得分较高，股价稳步站在均线系统上方，短期内仍有向上拓展空间的动力。"
-    elif intensity <= 35:
-        signal = "Sell"
-        stage = "弱势探底"
-        short_summary = "跌得很惨，机构在跑，短期别碰。"
-        detailed_summary = f"该股近期走势极弱，资金持续流出，{reasons[0] if reasons else '破位迹象明显'}。技术面得分偏低，各级指标均处于空头区域，建议回避风险。"
-    else:
-        signal = "Neutral"
-        stage = "震荡博弈"
-        short_summary = "多空博弈，趋势不明，建议观望。"
-        detailed_summary = f"目前股价处于胶着状态，{reasons[0] if reasons else '成交量维持现状'}。多空双方力量均衡，建议在关键支撑位与压力位之间窄幅波动观望。"
-    
-    conclusion = short_summary # 兼容旧版
-    
-    trend_judgment = [
-        {"period": "短期 (7天)", "trend": stage, "explanation": conclusion},
-        {"period": "中期 (1个月)", "trend": "震荡调整", "explanation": "中期趋势受阻，需关注大盘走势。"},
-        {"period": "长期 (半年以上)", "trend": "价值回归", "explanation": "长期基本面稳健，具备配置价值。"}
+        analysis_error = "VIP 体验已到期"
+
+    # ================= Fallback to Local Engine =================
+    evidence = [
+        "价格站在" + ("重要均线之上，底气较足" if price > last['ma20'] else "支撑位附近，正在观察"),
+        "今天的买盘力量比前几天" + ("更积极一些" if vol_ratio > 1.2 else "要安静不少"),
+        "行业整体表现" + ("比较热闹" if quote_change > 0 else "稍微有点冷清")
     ]
+    status_msg = f"系统提示：{analysis_error}"
+    score = round(50 + (15 if price > last['ma20'] else -15) + (10 if quote_change > 0 else -5), 1)
     
-    return {
+    if score > 60:
+        beginner_summary = "现在上涨的劲头很足，可以多关注"
+    elif score > 50:
+        beginner_summary = "目前处于小步快跑状态，趋势还行"
+    elif score > 40:
+        beginner_summary = "现在还没跌够，建议再等等看"
+    else:
+        beginner_summary = "各方面都比较弱，现在不是进场时机"
+
+    def mask_vip(data):
+        """对非 VIP 用户进行数据脱敏"""
+        if not data: return data
+        mask_text = "*** VIP 会员可查看"
+        
+        if isinstance(data, dict):
+            new_data = {}
+            for k, v in data.items():
+                if k in ["symbol", "date", "type", "price", "intensity", "signal", "indicators", "period", "vol_ratio", "price_change", "pe", "pb", "roe", "eps", "debt_ratio"]:
+                    new_data[k] = v
+                elif isinstance(v, (dict, list)):
+                    new_data[k] = mask_vip(v)
+                else:
+                    new_data[k] = mask_text
+            return new_data
+        elif isinstance(data, list):
+            return [mask_vip(item) for item in data]
+        return mask_text
+
+    result = {
         "symbol": symbol,
-        "advice": conclusion[:15] + "...",
-        "signal": signal,
-        "intensity": intensity,
-        "main_force": f"本地引擎: {stage}",
-        "detailed_advice": detailed_summary,
-        "structured_analysis": {
-            "short_summary": short_summary,
-            "detailed_summary": detailed_summary,
-            "conclusion": conclusion,
-            "tech_status": " | ".join(reasons),
-            "main_force": {"stage": stage, "inference": "中等规模资金参与", "evidence": reasons},
-            "trading_plan": {"buy": "突破关键位买入", "sell": "破位5日线止损", "position": "3-5成仓位"},
-            "scenarios": {"optimistic": "向上突破", "neutral": "区间震荡", "pessimistic": "放量下跌"},
-            "trend_judgment": trend_judgment
+        "advice": analysis.get("short_summary", "诊断已生成")[:15] + "..." if analysis else beginner_summary[:15] + "...",
+        "signal": (analysis or {}).get("signal", "Neutral") if analysis else ("Buy" if score > 55 else "Neutral"),
+        "intensity": (analysis or {}).get("intensity", 50) if analysis else score,
+        "main_force": (analysis.get("structured_analysis", {}).get("main_force", {}).get("stage", "分析中")) if (analysis and analysis.get("structured_analysis")) else "观察期",
+        "detail_advice": analysis.get("detailed_summary", "") if analysis else (f"{status_msg}。当前已为您切换至本地规则探测引擎进行趋势推演。"),
+        "structured_analysis": analysis.get("structured_analysis") if (analysis and analysis.get("structured_analysis")) else {
+            "short_summary": beginner_summary,
+            "detailed_summary": f"【{status_msg}】简单来说，这只股票目前" + ("表现比较强，像是个优等生" if score > 60 else "还在调整，需要多点耐心") + "。建议参考下方具体的操盘建议。",
+            "tech_status": " | ".join(evidence),
+            "main_force": {"stage": "博弈中", "inference": "主力迹象偏" + ("强" if score > 55 else "稳"), "evidence": evidence},
+            "trading_plan": {"buy": "站稳MA20买入", "sell": "跌破MA5卖出", "position": "3成"},
+            "scenarios": {"optimistic": "向上试探压力", "neutral": "区间震荡", "pessimistic": "震荡向下"},
+            "trend_judgment": [
+                {"period": "短期", "trend": "震荡", "explanation": "本地规则探测"},
+                {"period": "中期", "trend": "观察", "explanation": "本地规则探测"},
+                {"period": "长期", "trend": "筑底", "explanation": "数据外推"}
+            ],
+            "chart_signals": [
+                {"date": last['日期'], "type": "signal", "price": last['最低'], "title": "近期支撑位"}
+            ]
         },
-        "indicators": {
+        "indicators": (analysis.get("indicators")) if (analysis and analysis.get("indicators")) else {
             "vol_ratio": round(vol_ratio, 2),
-            "price_change": round(price_change * 100, 2),
-            "pe": pe,
-            "pb": pb,
-            "roe": roe,
-            "eps": eps,
-            "debt_ratio": debt_ratio,
-            "dividend_yield": 3.2,
-            "ps_ratio": 2.5,
-            "revenue_growth": 15.6
+            "price_change": quote_change,
+            "pe": pe, "pb": pb, "roe": roe, "eps": eps, "debt_ratio": debt_ratio
         }
     }
+
+    if not is_vip:
+        result["advice"] = mask_vip(result["advice"])
+        result["detail_advice"] = mask_vip(result["detail_advice"])
+        result["main_force"] = mask_vip(result["main_force"])
+        result["structured_analysis"] = mask_vip(result["structured_analysis"])
+    
+    return result
 
 # ==================== 管理员和用户管理 API ====================
 
@@ -1202,14 +1206,29 @@ async def update_system_config(config: SystemConfigUpdate):
         'base_url': config.base_url,
         'alipay_app_id': config.alipay_app_id,
         'alipay_private_key': config.alipay_private_key,
-        'alipay_public_key': config.alipay_public_key
+        'alipay_public_key': config.alipay_public_key,
+        'platform_name': config.platform_name,
+        'platform_name_en': config.platform_name_en,
+        'platform_slogan': config.platform_slogan,
+        'platform_logo': config.platform_logo,
+        'dev_name': config.dev_name,
+        'dev_phone': config.dev_phone,
+        'dev_email': config.dev_email,
+        'dev_wechat_qr': config.dev_wechat_qr,
+        'announcement_content': config.announcement_content,
+        'rate_limit_rules': config.rate_limit_rules,
+        'rate_limit_msg': config.rate_limit_msg,
+        'alert_msg_auth_required': config.alert_msg_auth_required,
+        'alert_msg_vip_expired': config.alert_msg_vip_expired,
+        'rate_limit_count': config.rate_limit_count,
+        'rate_limit_period': config.rate_limit_period
     }
     
     for k, v in updates.items():
         if v is not None:
             cursor.execute(
                 "UPDATE system_config SET config_value = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = ?",
-                (v, k)
+                (str(v), k)
             )
             if k == 'deepseek_api_key':
                 os.environ["DEEPSEEK_API_KEY"] = v
@@ -1218,6 +1237,24 @@ async def update_system_config(config: SystemConfigUpdate):
     conn.close()
     
     return {"success": True, "message": "配置更新成功"}
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """通用文件上传接口"""
+    try:
+        # 确保目录存在
+        os.makedirs("uploads", exist_ok=True)
+        # 生成唯一文件名
+        file_ext = file.filename.split('.')[-1]
+        unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
+        file_path = os.path.join("uploads", unique_filename)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        return {"url": f"http://localhost:8000/uploads/{unique_filename}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/captcha")
 async def get_captcha():
@@ -1279,15 +1316,26 @@ async def user_login(credentials: AdminLogin):
                 # 最后的兜底，防止因为日期格式导致登录崩溃
                 expires_at = datetime.datetime.now() + datetime.timedelta(days=365)
 
-        if datetime.datetime.now() > expires_at:
-            raise HTTPException(status_code=403, detail="您的VIP会员已到期,请联系开发者续续费,联系电话:158-542-69366")
-        
+        # 确保邀请码存在（为老用户补全）
+        res_user = dict(user)
+        ref_code = res_user.get('referral_code')
+        if ref_code is None or str(ref_code).strip() == "" or ref_code == "None":
+            new_code = uuid.uuid4().hex[:8].upper()
+            cursor.execute("UPDATE users SET referral_code = ? WHERE id = ?", (new_code, user['id']))
+            conn.commit()
+            res_user['referral_code'] = new_code
+        else:
+            res_user['referral_code'] = ref_code
+
         return {
             "success": True,
             "user": {
-                "id": user['id'],
-                "username": user['username'],
-                "expires_at": user['expires_at']
+                "id": res_user['id'],
+                "username": res_user['username'],
+                "phone": res_user.get('phone'),
+                "expires_at": res_user['expires_at'],
+                "referral_code": res_user['referral_code'],
+                "avatar": res_user.get('avatar')
             }
         }
     finally:
@@ -1303,30 +1351,162 @@ async def user_register(user: UserRegister):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 注册用户先设为激活，但有效期为现在（即已到期，需前往支付）
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 注册用户默认激活，且享有 7 天 VIP 体验期
+    register_time = datetime.datetime.now()
+    expires_at = (register_time + datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
     hashed_password = hash_password(user.password)
     
+    # 生成唯一邀请码
+    new_referral_code = uuid.uuid4().hex[:8].upper()
+    
+    # 检查邀请码是否存在
+    invited_by_id = None
+    if user.referral_code:
+        cursor.execute("SELECT id FROM users WHERE referral_code = ?", (user.referral_code,))
+        inviter = cursor.fetchone()
+        if inviter:
+            invited_by_id = inviter['id']
+
     try:
         cursor.execute(
-            "INSERT INTO users (username, password, phone, is_active, expires_at) VALUES (?, ?, ?, 1, ?)",
-            (user.username, hashed_password, user.phone, now_str)
+            "INSERT INTO users (username, password, phone, is_active, expires_at, referral_code, invited_by) VALUES (?, ?, ?, 1, ?, ?, ?)",
+            (user.username, hashed_password, user.phone, expires_at, new_referral_code, invited_by_id)
         )
         conn.commit()
         user_id = cursor.lastrowid
         conn.close()
         return {
             "success": True, 
-            "message": "注册成功，请选择会员套餐以开通全量功能",
+            "message": "注册成功！您已获得 7 天 VIP 免费体验期，可查看完整版 AI 智能分析报告。",
             "user": {
                 "id": user_id,
                 "username": user.username,
-                "expires_at": now_str
+                "phone": user.phone,
+                "expires_at": expires_at,
+                "referral_code": new_referral_code,
+                "avatar": None
             }
         }
     except Exception as e:
         conn.close()
-        raise HTTPException(status_code=400, detail="用户名已存在，请换一个重试")
+        raise HTTPException(status_code=400, detail="用户名或手机号已存在")
+
+@app.get("/api/user/info/{identifier}")
+async def get_user_info(identifier: str):
+    """获取用户信息 (支持 ID 或 用户名)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 判断 identifier 是 ID 还是用户名
+    if identifier.isdigit():
+        cursor.execute("SELECT id, username, phone, expires_at, is_active, referral_code, avatar FROM users WHERE id = ?", (int(identifier),))
+    else:
+        cursor.execute("SELECT id, username, phone, expires_at, is_active, referral_code, avatar FROM users WHERE username = ?", (identifier,))
+    
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    res_user = dict(user)
+    ref_code = res_user.get('referral_code')
+    if ref_code is None or str(ref_code).strip() == "" or ref_code == "None":
+        # 为老用户自动生成邀请码
+        new_code = uuid.uuid4().hex[:8].upper()
+        cursor.execute("UPDATE users SET referral_code = ? WHERE id = ?", (new_code, user['id']))
+        conn.commit()
+        res_user['referral_code'] = new_code
+    else:
+        res_user['referral_code'] = ref_code
+        
+    conn.close()
+    return {
+        "success": True,
+        "user": res_user
+    }
+
+@app.put("/api/user/profile/{user_id}")
+async def update_user_profile(user_id: int, data: UserProfileUpdate):
+    """用户修改个人资料 (姓名、头像、密码)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 获取当前用户信息
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    updates = []
+    params = []
+    
+    if data.username:
+        # 检查用户名是否冲突
+        cursor.execute("SELECT id FROM users WHERE username = ? AND id != ?", (data.username, user_id))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="该姓名已被占用")
+        updates.append("username = ?")
+        params.append(data.username)
+        
+    if data.avatar:
+        # 如果新旧头像不同，尝试删除旧物理文件以节省空间
+        old_avatar = user['avatar']
+        if old_avatar and old_avatar != data.avatar:
+            try:
+                # 提取文件名
+                if "/uploads/" in old_avatar:
+                    filename = old_avatar.split("/uploads/")[-1]
+                    old_path = os.path.join("uploads", filename)
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
+            except Exception as e:
+                print(f"删除旧头像失败: {e}")
+
+        updates.append("avatar = ?")
+        params.append(data.avatar)
+        
+    if data.phone:
+        # 检查手机号是否冲突
+        cursor.execute("SELECT id FROM users WHERE phone = ? AND id != ?", (data.phone, user_id))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="该手机号已被注册")
+        updates.append("phone = ?")
+        params.append(data.phone)
+        
+    if data.new_password:
+        if not data.old_password:
+            conn.close()
+            raise HTTPException(status_code=400, detail="修改密码需要提供旧密码")
+        
+        if hash_password(data.old_password) != user['password']:
+            conn.close()
+            raise HTTPException(status_code=400, detail="旧密码错误")
+            
+        updates.append("password = ?")
+        params.append(hash_password(data.new_password))
+        
+    if not updates:
+        conn.close()
+        return {"success": True, "message": "没有需要更新的内容"}
+        
+    params.append(user_id)
+    update_str = ", ".join(updates)
+    cursor.execute(f"UPDATE users SET {update_str} WHERE id = ?", params)
+    conn.commit()
+    
+    # 获取更新后的完整信息
+    cursor.execute("SELECT id, username, phone, is_active, expires_at, referral_code, avatar FROM users WHERE id = ?", (user_id,))
+    updated_user = dict(cursor.fetchone())
+    
+    conn.close()
+    return {
+        "success": True,
+        "message": "资料更新成功",
+        "user": updated_user
+    }
 
 # ==================== 用户密码重置 API ====================
 
@@ -1481,9 +1661,6 @@ async def get_influential_news(symbol: str):
         logger.error(f"Error fetching influential news for {symbol}: {e}")
         return []
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 # --- Payment & VIP Routes ---
 
@@ -1516,7 +1693,8 @@ async def get_plans():
     """获取所有可用订阅套餐"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM subscription_plans WHERE is_active = 1")
+    # 增加排序：权重大的在前，其次是 ID 倒序（最新添加在前）
+    cursor.execute("SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY sort_order DESC, id DESC")
     plans = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return plans
@@ -1604,7 +1782,7 @@ async def payment_callback(request: Request):
             )
             
             # 4. 延长会员有效期
-            cursor.execute("SELECT expires_at FROM users WHERE id = ?", (log['user_id'],))
+            cursor.execute("SELECT expires_at, invited_by FROM users WHERE id = ?", (log['user_id'],))
             user = cursor.fetchone()
             current_expiry = datetime.datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S")
             # 如果已过期，从现在开始加；如果未过期，在原基础上加
@@ -1612,6 +1790,19 @@ async def payment_callback(request: Request):
             new_expiry = (start_date + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
             
             cursor.execute("UPDATE users SET expires_at = ?, is_active = 1 WHERE id = ?", (new_expiry, log['user_id']))
+            
+            # --- 邀请奖励逻辑 ---
+            if user['invited_by']:
+                # 奖励推荐人通过该订单天数的 10% (最少1天)
+                reward_days = max(1, int(days * 0.1))
+                cursor.execute("SELECT expires_at FROM users WHERE id = ?", (user['invited_by'],))
+                inviter = cursor.fetchone()
+                if inviter:
+                    inviter_expiry = datetime.datetime.strptime(inviter['expires_at'], "%Y-%m-%d %H:%M:%S")
+                    inviter_start = max(inviter_expiry, datetime.datetime.now())
+                    inviter_new_expiry = (inviter_start + datetime.timedelta(days=reward_days)).strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute("UPDATE users SET expires_at = ? WHERE id = ?", (inviter_new_expiry, user['invited_by']))
+                    logger.info(f"Referral reward: User {user['invited_by']} rewarded {reward_days} days for invitee {log['user_id']}")
             conn.commit()
             
         conn.close()
@@ -1636,7 +1827,7 @@ async def redeem_invite(data: InviteRedeem):
     code_entry = cursor.fetchone()
     if not code_entry:
         conn.close()
-        raise HTTPException(status_code=400, detail="口令无效或已被使用")
+        raise HTTPException(status_code=400, detail="邀请码无效或已被使用")
         
     # 3. 更新邀请码状态
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1662,38 +1853,88 @@ async def redeem_invite(data: InviteRedeem):
 async def admin_get_plans():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM subscription_plans")
+    cursor.execute("SELECT * FROM subscription_plans ORDER BY sort_order DESC, id DESC")
     plans = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return plans
 
 @app.post("/api/admin/subscription/plans")
 async def admin_add_plan(plan: SubscriptionPlanCreate):
+    logger.info(f"Adding new plan: {plan.name}, duration: {plan.duration_days}, price: {plan.price}, sort: {plan.sort_order}")
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO subscription_plans (name, duration_days, price, description) VALUES (?, ?, ?, ?)",
-        (plan.name, plan.duration_days, plan.price, plan.description)
+        "INSERT INTO subscription_plans (name, duration_days, price, description, sort_order) VALUES (?, ?, ?, ?, ?)",
+        (plan.name, plan.duration_days, plan.price, plan.description, plan.sort_order)
     )
     conn.commit()
     conn.close()
     return {"message": "套餐添加成功"}
 
-@app.post("/api/admin/invite/generate")
-async def admin_generate_invites(data: InviteCodeCreate):
+@app.put("/api/admin/subscription/plans/{plan_id}")
+async def admin_update_plan(plan_id: int, plan: SubscriptionPlanCreate):
+    logger.info(f"Updating plan ID {plan_id}: {plan.name}, sort: {plan.sort_order}")
     conn = get_db_connection()
     cursor = conn.cursor()
-    generated_codes = []
-    for _ in range(data.count):
-        code = f"VIP-{uuid.uuid4().hex[:8].upper()}"
-        cursor.execute(
-            "INSERT INTO invite_codes (code, duration_days) VALUES (?, ?)",
-            (code, data.duration_days)
-        )
-        generated_codes.append(code)
+    cursor.execute(
+        "UPDATE subscription_plans SET name = ?, duration_days = ?, price = ?, description = ?, sort_order = ? WHERE id = ?",
+        (plan.name, plan.duration_days, plan.price, plan.description, plan.sort_order, plan_id)
+    )
     conn.commit()
     conn.close()
-    return {"codes": generated_codes}
+    return {"message": "套餐更新成功"}
+
+@app.delete("/api/admin/subscription/plans/{plan_id}")
+async def admin_delete_plan(plan_id: int):
+    """删除订阅套餐"""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # 检查是否存在引用（可选，但有助于通过日志解释原因）
+        cursor.execute("SELECT COUNT(*) as count FROM payment_logs WHERE plan_id = ?", (plan_id,))
+        count = cursor.fetchone()['count']
+        if count > 0:
+            logger.warning(f"Attempting to delete plan {plan_id} which has {count} associated payment logs.")
+            # 如果业务允许，可以选择不删除或级联删除，这里先强制尝试
+        
+        cursor.execute("DELETE FROM subscription_plans WHERE id = ?", (plan_id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="未找到该套餐记录")
+            
+        conn.commit()
+        logger.info(f"Admin deleted subscription plan ID: {plan_id}")
+        return {"message": "套餐已成功删除"}
+    except sqlite3.Error as e:
+        logger.error(f"Database error during plan deletion: {e}")
+        raise HTTPException(status_code=500, detail=f"数据库操作失败: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error during plan deletion: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.post("/api/admin/invite/generate")
+async def admin_generate_invites(data: InviteCodeCreate):
+    """批量生成邀请码"""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        generated_codes = []
+        for _ in range(data.count):
+            # 使用 UUID 保证唯一性并附加前缀
+            code = f"VIP-{uuid.uuid4().hex[:8].upper()}"
+            cursor.execute(
+                "INSERT INTO invite_codes (code, duration_days) VALUES (?, ?)",
+                (code, data.duration_days)
+            )
+            generated_codes.append(code)
+        conn.commit()
+        return {"codes": generated_codes}
+    except Exception as e:
+        logger.error(f"Invite generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"数据库写入失败: {str(e)}")
+    finally:
+        conn.close()
 @app.get("/api/admin/invite/codes")
 async def admin_get_invites():
     conn = get_db_connection()
@@ -1741,15 +1982,31 @@ async def mock_confirm(out_trade_no: str):
             (f"MOCK_{uuid.uuid4().hex[:10]}", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), out_trade_no)
         )
         
-        cursor.execute("SELECT expires_at FROM users WHERE id = ?", (log['user_id'],))
+        cursor.execute("SELECT expires_at, invited_by FROM users WHERE id = ?", (log['user_id'],))
         user = cursor.fetchone()
         current_expiry = datetime.datetime.strptime(user['expires_at'], "%Y-%m-%d %H:%M:%S")
         start_date = max(current_expiry, datetime.datetime.now())
         new_expiry = (start_date + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
         
         cursor.execute("UPDATE users SET expires_at = ?, is_active = 1 WHERE id = ?", (new_expiry, log['user_id']))
+        
+        # --- 邀请奖励逻辑 (Mock 模式也包含) ---
+        if user['invited_by']:
+            reward_days = max(1, int(days * 0.1))
+            cursor.execute("SELECT expires_at FROM users WHERE id = ?", (user['invited_by'],))
+            inviter = cursor.fetchone()
+            if inviter:
+                inviter_expiry = datetime.datetime.strptime(inviter['expires_at'], "%Y-%m-%d %H:%M:%S")
+                inviter_start = max(inviter_expiry, datetime.datetime.now())
+                inviter_new_expiry = (inviter_start + datetime.timedelta(days=reward_days)).strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute("UPDATE users SET expires_at = ? WHERE id = ?", (inviter_new_expiry, user['invited_by']))
         conn.commit()
         conn.close()
         return {"success": True, "message": f"已手动确认支付，续费 {days} 天", "new_expiry": new_expiry}
     conn.close()
     return {"success": False, "message": "订单不存在或已处理"}
+
+if __name__ == "__main__":
+    import uvicorn
+    # Enable reload for easier development updates
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

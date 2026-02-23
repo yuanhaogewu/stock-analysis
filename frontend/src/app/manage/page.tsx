@@ -10,6 +10,22 @@ export default function AdminLoginPage() {
     const [resetAnswer, setResetAnswer] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
+    const [platformConfig, setPlatformConfig] = useState({ name: '智弈', en: 'MindNode', slogan: '管理后台' });
+
+    useState(() => {
+        fetch("http://localhost:8000/api/admin/config")
+            .then(res => res.json())
+            .then(data => {
+                if (data.platform_name) {
+                    setPlatformConfig({
+                        name: data.platform_name,
+                        en: data.platform_name_en,
+                        slogan: data.platform_slogan
+                    });
+                }
+            })
+            .catch(() => { });
+    });
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -47,7 +63,8 @@ export default function AdminLoginPage() {
 
             if (response.ok) {
                 const data = await response.json();
-                alert(`您的登录密码是: ${data.password}`);
+                const title = `${platformConfig.name}(${platformConfig.en}) - ${platformConfig.slogan}`;
+                alert(`${title}\n\n您的登录密码是: ${data.password}`);
                 setShowReset(false);
                 setResetAnswer("");
             } else {
@@ -73,17 +90,17 @@ export default function AdminLoginPage() {
                 background: 'rgba(26, 32, 44, 0.95)',
                 backdropFilter: 'blur(10px)'
             }}>
-                <h1 style={{ fontSize: '28px', marginBottom: '8px', textAlign: 'center' }}>
+                <h1 style={{ fontSize: '28px', marginBottom: '8px', textAlign: 'center', color: '#ffffff' }}>
                     🔐 管理员登录
                 </h1>
-                <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '32px' }}>
-                    智弈 (MindNode) 管理后台
+                <p style={{ color: '#a0aec0', textAlign: 'center', marginBottom: '32px' }}>
+                    {platformConfig.name} ({platformConfig.en}) {platformConfig.slogan}
                 </p>
 
                 {!showReset ? (
                     <form onSubmit={handleLogin}>
                         <div style={{ marginBottom: '20px' }}>
-                            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', color: '#e2e8f0' }}>
                                 用户名
                             </label>
                             <input
@@ -104,7 +121,7 @@ export default function AdminLoginPage() {
                         </div>
 
                         <div style={{ marginBottom: '24px' }}>
-                            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', color: '#e2e8f0' }}>
                                 密码
                             </label>
                             <input
@@ -164,7 +181,7 @@ export default function AdminLoginPage() {
                                 style={{
                                     background: 'none',
                                     border: 'none',
-                                    color: 'var(--accent-blue)',
+                                    color: '#63b3ed',
                                     cursor: 'pointer',
                                     fontSize: '14px',
                                     textDecoration: 'underline'

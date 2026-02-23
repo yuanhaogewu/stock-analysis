@@ -1,0 +1,203 @@
+
+> stock-analysis-frontend@0.1.0 dev
+> next dev -p 3002
+
+  ▲ Next.js 14.2.0
+  - Local:        http://localhost:3002
+
+ ✓ Starting...
+ ✓ Ready in 2.1s
+ ○ Compiling /manage ...
+ ✓ Compiled /manage in 1486ms (462 modules)
+ GET /manage 200 in 1623ms
+ ✓ Compiled / in 494ms (454 modules)
+ GET / 200 in 606ms
+ GET / 200 in 88ms
+ GET /manage 200 in 36ms
+ ✓ Compiled /manage/dashboard in 342ms (460 modules)
+ ✓ Compiled in 315ms (460 modules)
+ GET /manage/dashboard 200 in 165ms
+ GET /manage/dashboard 200 in 72ms
+ GET /manage/dashboard 200 in 77ms
+ GET /manage/dashboard 200 in 33ms
+ GET /manage/dashboard 200 in 66ms
+ GET /manage/dashboard 200 in 56ms
+ GET /manage/dashboard 200 in 62ms
+ GET /manage/dashboard 200 in 235ms
+ GET /manage/dashboard 200 in 229ms
+ GET /manage/dashboard 200 in 248ms
+ GET /manage/dashboard 200 in 141ms
+ GET /manage/dashboard 200 in 44ms
+ GET /manage/dashboard 200 in 215ms
+ GET /manage/dashboard 200 in 27ms
+ GET / 200 in 66ms
+ ✓ Compiled /pay in 386ms (490 modules)
+ GET /pay 200 in 61ms
+ GET /pay 200 in 21ms
+ ✓ Compiled in 232ms (490 modules)
+ ✓ Compiled in 83ms (490 modules)
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ GET /pay 200 in 212ms
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ✓ Compiled in 133ms (490 modules)
+ GET /pay 200 in 119ms
+ ⨯ ./src/app/pay/page.tsx
+Error: 
+  [31mx[0m Unexpected token `div`. Expected jsx identifier
+     ,-[[36;1;4m/Users/apple/stock/frontend/src/app/pay/page.tsx[0m:143:1]
+ [2m143[0m |     };
+ [2m144[0m | 
+ [2m145[0m |     return (
+ [2m146[0m |         <div style={containerStyle}>
+     : [31;1m         ^^^[0m
+ [2m147[0m |             {/* Background Decorations */}
+ [2m148[0m |             <div style={blobStyle1}></div>
+ [2m149[0m |             <div style={blobStyle2}></div>
+     `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/pay/page.tsx
+ ✓ Compiled in 237ms (492 modules)
+ GET /pay 200 in 110ms
+ GET /pay 200 in 38ms
+ ✓ Compiled /login in 269ms (498 modules)
+ ✓ Compiled in 335ms (498 modules)
+ GET /pay 200 in 89ms
+ ✓ Compiled /sectors in 210ms (504 modules)
+ ✓ Compiled /watchlist in 124ms (510 modules)
+ GET / 200 in 69ms
+ GET / 200 in 40ms
+ ✓ Compiled in 448ms (502 modules)
+ GET / 200 in 63ms
+ GET / 200 in 29ms
+ GET / 200 in 30ms
+ ✓ Compiled in 342ms (502 modules)
+ GET / 200 in 71ms
+ GET / 200 in 22ms
+ GET / 200 in 37ms
+ ✓ Compiled in 106ms (502 modules)
+ ✓ Compiled in 171ms (502 modules)
+ GET / 200 in 48ms
+ GET / 200 in 26ms
+ GET / 200 in 18ms
+ GET / 200 in 22ms
+ GET / 200 in 42ms
+ GET / 200 in 31ms
+ GET / 200 in 39ms
+ ✓ Compiled in 304ms (502 modules)
+ GET / 200 in 86ms
+ GET / 200 in 19ms
+ GET / 200 in 30ms
+ GET / 200 in 22ms
+ GET / 200 in 17ms
+ GET / 200 in 18ms
+ GET / 200 in 15ms
+ GET / 200 in 21ms
+ GET / 200 in 17ms
+ GET / 200 in 29ms
+ ○ Compiling /stock/[code] ...
+ ✓ Compiled /stock/[code] in 2.3s (1621 modules)
+ GET /stock/300449 200 in 2821ms
+ GET /stock/300449 200 in 242ms
+ GET /stock/300449 200 in 35ms
+ GET /stock/300449 200 in 37ms
+ GET /stock/300449 200 in 27ms
+ GET /stock/300449 200 in 36ms
+ GET /stock/300449 200 in 29ms
+ ✓ Compiled in 475ms (1617 modules)
+ ✓ Compiled in 423ms (1617 modules)
+ GET /stock/300449 200 in 263ms
+ ✓ Compiled / in 208ms (814 modules)
+ ✓ Compiled /sectors in 175ms (802 modules)
+ GET /stock/688981 200 in 131ms
+ GET /stock/002594 200 in 38ms
+ GET /stock/002594 200 in 126ms
+ GET /stock/002594 200 in 38ms
+ GET / 200 in 61ms
+ GET /stock/300449 200 in 29ms
+ GET /stock/300449 200 in 192ms
+ GET /manage/dashboard 200 in 121ms
+ ✓ Compiled in 1229ms (1605 modules)
+ GET /manage/dashboard 200 in 102ms
+ ✓ Compiled in 449ms (1605 modules)
+ ✓ Compiled in 329ms (1605 modules)
+ ✓ Compiled in 737ms (1605 modules)
+ ✓ Compiled in 209ms (1605 modules)
+ GET /stock/002594 200 in 389ms
+ GET /stock/002594 200 in 56ms
+ GET /stock/300158 200 in 71ms
+ GET /manage/dashboard 200 in 59ms
+ GET / 200 in 32ms
+ GET /stock/920166 200 in 25ms
+ GET /stock/920166 200 in 31ms
+ GET /stock/300158 200 in 26ms
+ GET /stock/300449 200 in 29ms
+ GET / 200 in 68ms
+ ✓ Compiled in 761ms (1605 modules)
+ ✓ Compiled in 300ms (1605 modules)
+ ✓ Compiled in 451ms (1605 modules)
+ ✓ Compiled in 596ms (1605 modules)
+ GET /stock/300449 200 in 337ms
+ GET /stock/300449 200 in 54ms
+ ✓ Compiled in 775ms (1605 modules)
+ ✓ Compiled in 389ms (1605 modules)
+ ✓ Compiled in 209ms (1605 modules)
+ ✓ Compiled in 157ms (1605 modules)
+ ✓ Compiled in 273ms (1607 modules)
+ ✓ Compiled in 1076ms (1619 modules)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /stock/300449 200 in 420ms
+ GET /stock/300449 200 in 67ms
+ GET /stock/300449 200 in 76ms
+ ✓ Compiled in 940ms (1619 modules)
+ ✓ Compiled in 340ms (1619 modules)
+ GET /stock/300449 200 in 335ms
+ GET /stock/300449 200 in 35ms
+ GET /stock/300449 200 in 56ms
+ ✓ Compiled in 830ms (1619 modules)
+ ✓ Compiled in 192ms (1619 modules)
+ ✓ Compiled in 393ms (1619 modules)
+ GET /stock/300449 200 in 334ms
+ ○ Compiling /pay ...
+ ✓ Compiled /pay in 504ms (821 modules)
+ GET /pay 200 in 98ms
+ GET /pay 200 in 59ms
+ ✓ Compiled in 697ms (1631 modules)
+ ✓ Compiled in 328ms (1631 modules)
+ ✓ Compiled /watchlist in 216ms (821 modules)
+ ✓ Compiled in 482ms (1076 modules)
+ GET /watchlist 200 in 119ms
+ ✓ Compiled in 753ms (1090 modules)
+ ✓ Compiled in 272ms (1090 modules)
+ ✓ Compiled in 450ms (1076 modules)
+ GET /watchlist 200 in 111ms
+ ✓ Compiled in 407ms (1076 modules)
+ GET /watchlist 200 in 111ms
+ ✓ Compiled in 2.4s (1076 modules)
+ GET / 200 in 99ms
+ GET /manage/dashboard 200 in 64ms
+ GET /manage/dashboard 200 in 28ms
+ ✓ Compiled in 607ms (1076 modules)
+ ✓ Compiled in 333ms (814 modules)
+ ✓ Compiled in 472ms (1076 modules)
+ ✓ Compiled in 518ms (1076 modules)
+ ✓ Compiled in 377ms (1076 modules)
+ ✓ Compiled in 790ms (1076 modules)
+ GET /pay 200 in 144ms
+ GET /manage/dashboard 200 in 210ms
+ GET / 200 in 133ms
+ GET /pay 200 in 30ms
+ GET / 200 in 65ms
+ ✓ Compiled /login in 279ms (266 modules)
+ GET /login 200 in 95ms
+ ○ Compiling /stock/[code] ...
+ ✓ Compiled /stock/[code] in 747ms (821 modules)
+ ○ Compiling /payment/mock ...
+ ✓ Compiled /payment/mock in 596ms (1643 modules)
+ GET /payment/mock?no=STK_17_1771815585_551 200 in 678ms
+ ✓ Compiled /sectors in 210ms (819 modules)
+ GET /stock/002335 200 in 288ms
+ ✓ Compiled in 1054ms (1634 modules)

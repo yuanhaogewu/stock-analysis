@@ -27,19 +27,80 @@ export default function PaymentPage() {
             router.push('/login');
             return;
         }
-        setUser(JSON.parse(token));
+
+        let initialUser: any;
+        try {
+            initialUser = JSON.parse(token);
+            if (!initialUser || (!initialUser.id && !initialUser.username)) {
+                throw new Error('Invalid token');
+            }
+        } catch (e) {
+            localStorage.removeItem('user_token');
+            router.push('/login');
+            return;
+        }
+
+        setUser(initialUser);
         fetchPlans();
+
+        // Fetch latest data from server
+        const syncUser = async () => {
+            // Priority: use ID, fallback to username if ID is missing in old tokens
+            const identifier = initialUser.id || initialUser.username;
+            if (!identifier) return;
+
+            try {
+                const res = await fetch(`http://localhost:8000/api/user/info/${identifier}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success && data.user) {
+                        const updatedUser = { ...initialUser, ...data.user };
+                        setUser(updatedUser);
+                        localStorage.setItem('user_token', JSON.stringify(updatedUser));
+                    }
+                }
+            } catch (err) {
+                console.error('User sync failed', err);
+            }
+        };
+        syncUser();
     }, [router]);
 
     const fetchPlans = async () => {
         try {
             const res = await fetch('http://localhost:8000/api/subscription/plans');
             const data = await res.json();
-            setPlans(data);
-            if (data.length > 0) setSelectedPlan(data[0].id);
+            if (Array.isArray(data)) {
+                setPlans(data);
+                if (data.length > 0) setSelectedPlan(data[0].id);
+            }
         } catch (err) {
             console.error('Failed to fetch plans');
         }
+    };
+
+    const handleCopy = (text: string) => {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text)
+                .then(() => setMessage({ type: 'success', text: '邀请码已复制到剪贴板！' }))
+                .catch(() => fallbackCopy(text));
+        } else {
+            fallbackCopy(text);
+        }
+    };
+
+    const fallbackCopy = (text: string) => {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            setMessage({ type: 'success', text: '邀请码已复制！' });
+        } catch (err) {
+            setMessage({ type: 'error', text: '复制失败，请手动选择复制' });
+        }
+        document.body.removeChild(textArea);
     };
 
     const handlePay = async () => {
@@ -155,7 +216,15 @@ export default function PaymentPage() {
 
                     {/* Right: Payment Plans */}
                     <section style={cardStyle}>
-                        <h2 style={sectionTitleStyle}><Zap size={20} style={{ marginRight: '8px' }} />选择套餐</h2>
+                        <div style={{ marginBottom: '24px', padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '16px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>当前账号状态</div>
+                            <div style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span>{new Date(user?.expires_at) > new Date() ? 'VIP 会员 (生效中)' : 'VIP 已到期 / 未开通'}</span>
+                                <span style={{ fontSize: '13px', fontWeight: 'normal', opacity: 0.8 }}>{user?.expires_at?.split(' ')[0]} 到期</span>
+                            </div>
+                        </div>
+
+                        <h2 style={sectionTitleStyle}><Zap size={20} style={{ marginRight: '8px' }} />1. 选择套餐</h2>
                         <div style={plansContainer}>
                             {plans.map(plan => (
                                 <div
@@ -188,14 +257,14 @@ export default function PaymentPage() {
                         </button>
 
                         <div style={dividerStyle}>
-                            <span style={dividerTextStyle}>或者使用邀请口令</span>
+                            <span style={dividerTextStyle}>使用兑换码</span>
                         </div>
 
                         <div style={inviteContainer}>
                             <Gift size={20} style={{ color: '#ec4899', position: 'absolute', left: '12px' }} />
                             <input
                                 type="text"
-                                placeholder="输入 1 个月临时会员口令"
+                                placeholder="请输入 16 位系统兑换码"
                                 value={inviteCode}
                                 onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
                                 style={inviteInputStyle}
@@ -208,20 +277,58 @@ export default function PaymentPage() {
                                 {redeeming ? '...' : '兑换'}
                             </button>
                         </div>
+
+                        <div style={{ marginTop: '24px', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
+                            <h2 style={{ ...sectionTitleStyle, marginBottom: '16px' }}><ShieldCheck size={20} style={{ marginRight: '8px' }} />2. 邀请奖励</h2>
+                            <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: '1.5' }}>
+                                    邀请好友注册并成功购买，您将获得该套餐时长 <span style={{ color: '#fbbf24' }}>10% 的额外 VIP 天数</span>。
+                                </div>
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    padding: '10px 14px',
+                                    background: 'var(--bg-base)',
+                                    borderRadius: '10px',
+                                    border: '1px solid var(--border-color)'
+                                }}>
+                                    <span style={{ fontSize: '16px', fontWeight: '700', color: 'var(--accent-blue)', letterSpacing: '1px' }}>
+                                        {user?.referral_code || '---'}
+                                    </span>
+                                    <button
+                                        onClick={() => handleCopy(user?.referral_code || '')}
+                                        style={{
+                                            padding: '4px 8px',
+                                            fontSize: '11px',
+                                            background: 'rgba(59, 130, 246, 0.1)',
+                                            color: 'var(--accent-blue)',
+                                            border: 'none',
+                                            borderRadius: '6px',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        复制
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </section>
                 </div>
 
-                {message.text && (
-                    <div style={{
-                        ...messageBoxStyle,
-                        background: message.type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                        color: message.type === 'error' ? '#f87171' : '#34d399',
-                        borderColor: message.type === 'error' ? '#ef4444' : '#10b981'
-                    }}>
-                        {message.text}
-                    </div>
-                )}
-            </main>
+                {
+                    message.text && (
+                        <div style={{
+                            ...messageBoxStyle,
+                            background: message.type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                            color: message.type === 'error' ? '#f87171' : '#34d399',
+                            borderColor: message.type === 'error' ? '#ef4444' : '#10b981'
+                        }}>
+                            {message.text}
+                        </div>
+                    )
+                }
+            </main >
 
             <style jsx global>{`
                 @keyframes fadeIn {
@@ -232,21 +339,22 @@ export default function PaymentPage() {
                     animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
                 }
             `}</style>
-        </div>
+        </div >
     );
 }
 
 // Styles
 const containerStyle: React.CSSProperties = {
     minHeight: '100vh',
-    background: '#0a0c10',
-    color: '#f8fafc',
+    background: 'var(--bg-base)',
+    color: 'var(--text-primary)',
     padding: '60px 20px',
     position: 'relative',
     overflow: 'hidden',
     display: 'flex',
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
+    transition: 'background-color 0.3s ease, color 0.3s ease'
 };
 
 const blobStyle1: React.CSSProperties = {
@@ -255,7 +363,8 @@ const blobStyle1: React.CSSProperties = {
     right: '-10%',
     width: '40%',
     height: '40%',
-    background: 'radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%)',
+    background: 'radial-gradient(circle, var(--accent-blue) 0%, transparent 70%)',
+    opacity: 0.1,
     filter: 'blur(80px)',
     zIndex: 0
 };
@@ -266,7 +375,8 @@ const blobStyle2: React.CSSProperties = {
     left: '-10%',
     width: '40%',
     height: '40%',
-    background: 'radial-gradient(circle, rgba(236, 72, 153, 0.1) 0%, transparent 70%)',
+    background: 'radial-gradient(circle, #ec4899 0%, transparent 70%)',
+    opacity: 0.1,
     filter: 'blur(80px)',
     zIndex: 0
 };
@@ -285,13 +395,13 @@ const titleStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'linear-gradient(to right, #fff, #94a3b8)',
+    background: 'linear-gradient(to right, var(--text-primary), var(--text-secondary))',
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent'
 };
 
 const subtitleStyle: React.CSSProperties = {
-    color: '#94a3b8',
+    color: 'var(--text-secondary)',
     fontSize: '16px'
 };
 
@@ -303,13 +413,14 @@ const gridContainer: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-    background: 'rgba(255, 255, 255, 0.03)',
+    background: 'var(--bg-card)',
     borderRadius: '24px',
-    border: '1px solid rgba(255, 255, 255, 0.05)',
+    border: '1px solid var(--border-color)',
     padding: '32px',
     backdropFilter: 'blur(20px)',
     display: 'flex',
-    flexDirection: 'column'
+    flexDirection: 'column',
+    boxShadow: 'var(--shadow-soft)'
 };
 
 const sectionTitleStyle: React.CSSProperties = {
@@ -318,7 +429,7 @@ const sectionTitleStyle: React.CSSProperties = {
     marginBottom: '24px',
     display: 'flex',
     alignItems: 'center',
-    color: '#f1f5f9'
+    color: 'var(--text-primary)'
 };
 
 const benefitList: React.CSSProperties = {
@@ -339,13 +450,13 @@ const benefitItem: React.CSSProperties = {
 const benefitTitle: React.CSSProperties = {
     fontSize: '15px',
     fontWeight: '600',
-    color: '#f1f5f9',
+    color: 'var(--text-primary)',
     marginBottom: '4px'
 };
 
 const benefitDesc: React.CSSProperties = {
     fontSize: '13px',
-    color: '#94a3b8',
+    color: 'var(--text-secondary)',
     lineHeight: '1.5'
 };
 
@@ -369,12 +480,12 @@ const planCardStyle: React.CSSProperties = {
 const planName: React.CSSProperties = {
     fontSize: '16px',
     fontWeight: '700',
-    color: '#f8fafc'
+    color: 'var(--text-primary)'
 };
 
 const planDesc: React.CSSProperties = {
     fontSize: '12px',
-    color: '#94a3b8',
+    color: 'var(--text-secondary)',
     marginTop: '4px'
 };
 
@@ -406,7 +517,7 @@ const dividerStyle: React.CSSProperties = {
 };
 
 const dividerTextStyle: React.CSSProperties = {
-    color: '#475569',
+    color: 'var(--text-secondary)',
     fontSize: '12px',
     padding: '0 12px',
     whiteSpace: 'nowrap'
@@ -422,10 +533,10 @@ const inviteContainer: React.CSSProperties = {
 const inviteInputStyle: React.CSSProperties = {
     flex: 1,
     padding: '12px 12px 12px 40px',
-    background: 'rgba(0,0,0,0.2)',
-    border: '1px solid rgba(255,255,255,0.05)',
+    background: 'var(--bg-base)',
+    border: '1px solid var(--border-color)',
     borderRadius: '12px',
-    color: 'white',
+    color: 'var(--text-primary)',
     fontSize: '14px',
     outline: 'none'
 };

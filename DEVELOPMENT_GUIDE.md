@@ -1,100 +1,98 @@
-# A股专业股票分析工具 - 开发与复现指南
+# A股专业股票分析工具 - 核心开发手册
 
-本标准开发文档旨在提供完整的项目定义、架构说明及环境配置流程。当您在新的 Antigravity 环境中导入本项目时，请按照以下指南执行，以确保功能与原始版本完全一致。
-
----
-
-## 1. 项目概览
-本项目是一款专为中国 A 股市场设计的专业化分析工具，采用 **React (Next.js)** 前端与 **FastAPI (Python)** 后端的全栈方案。
-
-### 核心功能列表：
-- **实时行情查询**：支持全市场指数、排行榜、个股报价展示。
-- **专业 K 线图表**：集成轻量级图表库，支持成交量显示。
-- **AI 智能深度诊断**：支持 DeepSeek 等大模型，按技术形态、资金行为进行结构化分析。
-- **管理员后台**：提供 API 配置、用户管理（有效期控制）、密码找回等功能。
-- **用户自选同步**：实现跨设备、基于云端数据库的自选股同步功能。
+本手册是本套“A股AI分析系统”的核心技术文档。其目的是帮助开发者在最短时间内理解本项目的开发语言、程序架构以及最关键的内容生成逻辑。
 
 ---
 
-## 2. 技术栈架构
+## 1. 核心架构概览 (System Architecture)
 
-### 前端 (Frontend)
-- **框架**: Next.js 14+ (App Router)
-- **语言**: TypeScript
-- **样式**: Vanilla CSS + Glassmorphism 风格
-- **图表**: Lightweight Charts
-- **状态管理**: React Hooks (useState/useEffect) + UserToken 鉴权
+本项目采用**前后端分离**的全栈架构，设计上强调“高响应性”与“金融级视觉体验”。
 
-### 后端 (Backend)
-- **框架**: FastAPI (Python 3.10+)
-- **数据库**: SQLite (轻量级本地持久化)
-- **数据源**: AkShare + 东财/新浪实时接口
-- **AI 引擎**: 支持 OpenAI 标准协议的大模型 (原生支持 DeepSeek)
+- **前端 (Frontend)**: 基于 **Next.js (React)** 的 App Router 模式。利用 Server Component 提供 SEO 优化，Client Component 处理高频交互。
+- **后端 (Backend)**: 基于 **FastAPI (Python)**。采用异步 IO 处理个股行情抓取与 AI 诊断任务。
+- **数据流**: 前端通过 REST API 与后端通信，后端动态对接 **AkShare** 指标引擎与 **DeepSeek** 大模型接口。
 
 ---
 
-## 3. 数据库设计 (stock_system.db)
+## 2. 技术栈说明 (Tech Stack)
 
-项目包含三个核心数据表：
-1. **admin**: 存储管理员凭证与找回密码的预设答案（赵双江）。
-2. **users**: 存储普通用户信息、账号状态（is_active）及 VIP 到期时间（expires_at）。
-3. **system_config**: 动态存储 LLM 的 API_KEY, MODEL_ID, BASE_URL。
-4. **watchlist**: 实现用户 ID 与股票代码的云端关联。
+### 2.1 开发语言与框架
+- **后端**: Python 3.10+ (FastAPI, Pandas, Httpx)
+- **前端**: TypeScript + React 18 (Next.js 14)
+- **样式**: 原生 CSS (Vanilla CSS)，遵循毛玻璃 (Glassmorphism) 与暗色金融视觉规范。
+- **数据库**: SQLite3 (使用轻量级本地文件存储配置与用户信息)。
 
----
-
-## 4. 复现步骤 (针对 Antigravity)
-
-### 步骤 A：环境初始化
-1. **克隆仓库**: `git clone https://github.com/yuanhaogewu/stock-analysis.git`
-2. **后端准备**:
-   - `cd backend`
-   - 创建虚拟环境: `python -m venv venv`
-   - 激活环境: `source venv/bin/activate` (Mac/Linux) 或 `venv\Scripts\activate` (Win)
-   - 安装依赖: `pip install fastapi uvicorn akshare pandas sqlalchemy pydantic requests requests_cache`
-3. **前端准备**:
-   - `cd ../frontend`
-   - 安装依赖: `npm install`
-
-### 步骤 B：初始化运行
-1. **启动后端**:
-   - 在 `backend` 目录下执行: `./venv/bin/python main.py`
-   - *注意：首次运行会自动根据 `database.py` 初始化 SQLite 数据库。*
-2. **启动前端**:
-   - 在 `frontend` 目录下执行: `npm run dev -- -p 3002` (建议使用 3002 端口)
-
-### 步骤 C：管理员初始化
-- 访问 `http://localhost:3002/manage`
-- 使用默认账号登录：`xinsiwei` / `Xinsiwei2026@`
-- 在后台配置大模型参数，否则 AI 诊断功能将无法使用。
+### 2.2 核心依赖
+- **行情引擎**: `akshare`（用于抓取 A 股实时排行榜、个股 K 线、指数数据）。
+- **图表系统**: `ECharts`（定制化的 K 线图、MACD 指标以及技术信号标注）。
+- **AI 交互**: `httpx`（异步处理大模型 API 请求）。
 
 ---
 
-## 5. 关键业务逻辑 (复现核心)
+## 3. 核心内容生成逻辑 (Core Content Logic)
 
-### 1. 验证码与过期拦截 (ClientLayout.tsx)
-前端通过 `ClientLayout` 拦截所有二级页面。
-- 如果检测到未登录（localStorage 无 token），强制跳转 `/login`。
-- 后端在登录接口中严格校验 `expires_at` 时间点。
+这是本系统的灵魂，主要体现在“AI 诊断引擎”与“本地备份逻辑”的协同。
 
-### 2. 云端自选逻辑
-- **添加/移除**：前端调用 `POST /api/user/watchlist/add|remove`，传递 `user_id`。
-- **列表显示**：通过 `GET /api/user/watchlist/{user_id}` 获取代码数组，再并发请求个股行情。
+### 3.1 结构化诊断逻辑 (AI Diagnosis)
+后端 `get_deepseek_analysis` 函数并非简单的聊天接口，它遵循以下生成链路：
+1. **数据采样**: 提取个股最新价格、指标（PE/PB/ROE）、以及最近 30 个交易日的 K 线序列。
+2. **逻辑约束**: 通过增强的系统提示词（System Prompt），强制 AI 将分析结构化为 JSON。
+3. **内容审计**: 
+   - **去专业化**: 核心结论必须被翻译为“股市新手”能秒懂的民间口语（如：使用“上涨势头很猛”而非“趋势多头”）。
+   - **禁止后验**: 明确禁止 AI 对过去的价格标注“买/卖”点，仅允许标注具有逻辑解释力的“技术洞察”点（💡 信号）。
 
-### 3. AI 提示词与响应
-- 后端 `get_deepseek_analysis` 函数使用了增强的系统 Prompt。
-- 逻辑：先进行本地量价诊断（Stage 分类），然后将数据喂给 AI 进行结构化（JSON）输出。
+### 3.2 本地规则探测引擎 (Fallback Engine)
+当 AI 接口超时或 API Key 失效时，后端会自动切换至本地规则：
+- 基于 **MA20 均线系统** 与 **量比波动** 进行动态得分计算。
+- 自动生成符合 AI 语境的“模拟推演”结论，确保用户体验不中断。
+
+### 3.3 会员等级与数据脱敏逻辑 (VIP & Censorship)
+系统对“AI 智能分析报告”版块实施了精细化的权限控制：
+- **VIP 会员 (含7天试用期)**：通过后端审核的到期时间判断，展示由 DeepSeek 生成的完整深度分析。
+- **普通会员 (已到期)**：
+  - 系统仍展示分析版块和基础指标。
+  - 核心分析结论（advice, detail_advice）及结构化分析细节（structured_analysis）会被 **mask_vip 函数** 动态脱敏。
+  - 脱敏后的内容以星号代替并提示 `*** VIP 会员可查看`。
+  - **性能优化**：对于已过期用户，后端会自动跳过高成本的 AI 接口调用，直接利用本地引擎生成脱敏骨架数据。
 
 ---
 
-## 6. 配置参数说明
-项目使用 `.env` 文件作为本地备选手动配置，但**优先从 SQLite 数据库获取**后台管理的配置项。
-- **管理员找回密码问题**: "这个系统的开发者是谁?"
-- **预设答案**: "赵双江"
+## 4. 关键业务逻辑与实现细节
+
+### 4.1 日期时间兼容性
+系统内所有日期比较（如校验 VIP 是否到期）均采用 **Naive Datetime** 转换逻辑：
+- 强制剥离 ISO 字符串中的时区信息（T/Z），确保 SQLite 的字符串存储与 Python `datetime.now()` 能够安全对比，防止系统崩溃。
+
+### 4.2 全局权限拦截 (ClientLayout)
+前端使用 `src/components/ClientLayout.tsx` 作为全局守卫：
+- 动态监听 `localStorage` 中的用户 Token。
+- 对诊股、支付等二级页面进行强拦截，未登录用户自动重定向至登录页。
+
+### 4.3 数据库模型
+- **users 表**: 核心字段 `expires_at` (账号有效期) 以及自动生成的 `referral_code` (邀请码)。新注册用户默认写入 `now + 7 days` 作为试用期限。新增 `avatar` 字段用于存储用户自定义头像。
+- **system_config 表**: 采用 KV 结构存储，支持管理员后台实时修改 AI Key、平台 LOGO、收款码及公告内容。
+
+### 4.4 个人资料修改逻辑 (Profile Management)
+系统支持用户自主修改个人信息：
+- **入口**: 点击侧边栏底部的用户头像或姓名即可打开个人资料编辑弹窗。
+- **功能**: 支持修改显示姓名（username）、上传头像（利用 `/api/upload` 接口）以及修改登录密码。
+- **安全**: 修改密码需提供原密码进行校验。更新成功后，系统会同步更新后端数据库及前端 `localStorage` 缓存。
+
+### 4.5 公告系统的 Markdown 渲染
+平台公告在前端采用了自定义的轻量级解析引擎：
+- **服务端存储**: 公告以纯文本格式存储。
+- **前端解析**: 在 `ClientLayout.tsx` 中通过正则替换实现对 `#` (标题)、`**` (加粗)、`-` (列表)、`>` (引用) 及 `code` (行内代码) 的实时渲染，无需依赖沉重的第三方 Markdown 库。
 
 ---
 
-## 7. 开发规范
-- **标识符**: 代码中采用全英文命名。
-- **回复语言**: 所有前端 UI 与 Antigravity 的回复必须使用 **简体中文**。
-- **设计风格**: 深蓝至紫色的渐变背景，卡片采用半透明玻璃质感 (`backdrop-filter: blur`)。
+## 5. 开发规范与美学准则
+
+- **命名规范**: 代码内标识符采用全英文。
+- **UI 风格**: 
+  - 背景：深蓝至紫色的微渐变 (`var(--bg-card)`)。
+  - 卡片：支持 `backdrop-filter: blur(12px)` 的半透明质感。
+  - 动态：所有交互按钮必须具备 `scale(1.02)` 的 Hover 缩放反馈。
+- **回复语言**: 最终面向用户的 UI 字符串与 AI 生成内容必须为 **简体中文**。
+
+---
+*本手册专注于开发逻辑，不包含环境部署及复现细节。*

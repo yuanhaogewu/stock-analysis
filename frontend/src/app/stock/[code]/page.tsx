@@ -46,6 +46,12 @@ interface Analysis {
             trend: string;
             explanation: string;
         }>;
+        chart_signals?: Array<{
+            date: string;
+            type: 'buy' | 'sell';
+            price: number;
+            title: string;
+        }>;
     };
     indicators: {
         vol_ratio: number;
@@ -71,10 +77,12 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     const [kline, setKline] = useState<any[]>([]);
     const [analysis, setAnalysis] = useState<Analysis | null>(null);
     const [loading, setLoading] = useState(true);
+    const [news, setNews] = useState<NewsItem[]>([]);
+    const [platformInfo, setPlatformInfo] = useState({ name: '芯思维', en: 'MindNode', slogan: '多维度股票AI分析系统' });
     const [error, setError] = useState<string | null>(null);
     const [userId, setUserId] = useState<number | null>(null);
     const [isInWatchlist, setIsInWatchlist] = useState(false);
-    const [news, setNews] = useState<NewsItem[]>([]);
+    const [analysisError, setAnalysisError] = useState<string | null>(null);
 
     useEffect(() => {
         const userToken = localStorage.getItem('user_token');
@@ -87,7 +95,28 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 console.error("Failed to parse user token:", e);
             }
         }
+        fetchPlatformInfo();
     }, [params.code]);
+
+    useEffect(() => {
+        if (quote?.名称) {
+            document.title = `${quote.名称} - ${platformInfo.name}(${platformInfo.en}) - ${platformInfo.slogan}`;
+        }
+    }, [quote, platformInfo]);
+
+    const fetchPlatformInfo = async () => {
+        try {
+            const res = await fetch('http://localhost:8000/api/admin/config');
+            if (res.ok) {
+                const data = await res.json();
+                setPlatformInfo({
+                    name: data.platform_name || '芯思维',
+                    en: data.platform_name_en || 'MindNode',
+                    slogan: data.platform_slogan || '多维度股票AI分析系统'
+                });
+            }
+        } catch (e) { console.error('Error fetching platform info'); }
+    };
 
     const checkWatchlist = async (uid: number) => {
         try {
@@ -125,6 +154,15 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     };
 
     useEffect(() => {
+        // 请求开始前，彻底清空旧状态，防止闪现或双重显示旧数据
+        setLoading(true);
+        setQuote(null);
+        setAnalysis(null);
+        setAnalysisError(null);
+        setNews([]);
+        setKline([]);
+        setError(null);
+
         // 1. Fetch Quote (High Priority)
         async function fetchQuote() {
             try {
@@ -170,22 +208,26 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 const res = await fetch(`http://localhost:8000/api/stock/analysis/${params.code}${uid ? `?user_id=${uid}` : ''}`);
                 if (res.ok) {
                     setAnalysis(await res.json());
+                    setAnalysisError(null);
                 } else if (res.status === 429) {
                     const data = await res.json();
                     const detail = data.detail || "";
                     if (detail.includes("每小时 20 次")) {
-                        setError(`📊 已达到分析限额\n\n${detail}\n\nVip 会员每小时可享 20 次深度诊断权益。如需继续使用，请于解封后重试。`);
+                        setAnalysisError(`📊 已达到分析限额\n\n${detail}\n\nVip 会员每小时可享 20 次深度诊断权益。`);
                     } else {
-                        setError(detail || "访问太频繁了，请稍后再试。");
+                        setAnalysisError(detail || "访问太频繁了，请稍后再试。");
                     }
-                    setLoading(false);
                 } else {
-                    const data = await res.json();
-                    setError(data.detail || "智能诊断获取失败，请重试。");
+                    try {
+                        const data = await res.json();
+                        setAnalysisError(data.detail || "智能诊断获取失败，请重试。");
+                    } catch (e) {
+                        setAnalysisError("服务器响应异常，请稍后重试。");
+                    }
                 }
             } catch (e) {
                 console.error("Analysis fetch error:", e);
-                setError("由于网络波动，智能诊断生成失败，请刷新页面。");
+                setAnalysisError("由于网络不稳定，智能诊断加载失败。");
             } finally {
                 setLoading(false);
             }
@@ -213,7 +255,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         </div>
     );
 
-    if (error) return (
+    if (error && !quote) return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '400px', margin: '100px auto' }}>
             <div className="card" style={{ padding: '40px', textAlign: 'center', borderColor: 'var(--accent-red)', background: 'rgba(255, 69, 58, 0.05)' }}>
                 <div style={{ fontSize: '48px', marginBottom: '20px' }}>⚠️</div>
@@ -360,6 +402,18 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     };
 
     const renderAnalysisSection = () => {
+        if (analysisError) return (
+            <div className="card" style={{ padding: '30px', textAlign: 'center', background: 'rgba(255, 69, 58, 0.05)', borderColor: 'var(--accent-red)' }}>
+                <div style={{ fontSize: '30px', marginBottom: '15px' }}>⚠️</div>
+                <div style={{ color: 'var(--accent-red)', fontWeight: 'bold', marginBottom: '8px' }}>智能诊断受限</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: '1.6', marginBottom: '20px' }}>{analysisError}</div>
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+                    <button className="btn-primary" onClick={() => window.location.reload()} style={{ padding: '6px 16px', fontSize: '12px' }}>重试</button>
+                    <button onClick={() => router.push('/pay')} style={{ padding: '6px 16px', fontSize: '12px', background: 'var(--accent-blue)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>开通会员</button>
+                </div>
+            </div>
+        );
+
         if (!analysis?.structured_analysis) return (
             <div style={{ color: 'var(--text-secondary)', padding: '20px', textAlign: 'center' }}>
                 <div className="spinner-small" style={{ margin: '0 auto 12px' }}></div>
@@ -727,7 +781,10 @@ export default function StockDetailPage({ params }: { params: { code: string } }
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                     <div className="card" style={{ padding: '32px', borderTop: '4px solid var(--accent-blue)' }}>
-                        <KLineChart data={kline} symbol={quote?.名称 || params.code} />
+                        <KLineChart
+                            data={Object.assign([...kline], { signals: analysis?.structured_analysis?.chart_signals })}
+                            symbol={quote?.名称 || params.code}
+                        />
                     </div>
 
                     <div className="card" style={{ padding: '32px', overflow: 'visible', borderTop: '4px solid var(--accent-green)' }}>
@@ -812,7 +869,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                     <div className="card glass" style={{ padding: '28px', borderTop: `4px solid ${analysis?.signal === 'Buy' ? 'var(--accent-red)' : analysis?.signal === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'}` }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>🚀 智能诊断报告</h3>
+                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>🚀 AI智能分析报告</h3>
                             <span style={{ fontSize: '10px', color: 'var(--accent-blue)', backgroundColor: 'rgba(0,122,255,0.1)', padding: '3px 10px', borderRadius: '20px', fontWeight: '700', letterSpacing: '0.05em' }}>AI 实时计算</span>
                         </div>
 

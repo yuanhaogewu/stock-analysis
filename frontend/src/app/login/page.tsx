@@ -12,6 +12,7 @@ export default function UserLoginPage() {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [captcha, setCaptcha] = useState({ id: '', svg: '' });
     const [captchaInput, setCaptchaInput] = useState('');
+    const [referralCode, setReferralCode] = useState('');
     const [loading, setLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
@@ -105,7 +106,8 @@ export default function UserLoginPage() {
                     password,
                     phone,
                     captcha_id: captcha.id,
-                    captcha_code: captchaInput
+                    captcha_code: captchaInput,
+                    referral_code: referralCode
                 }),
             });
 
@@ -251,7 +253,7 @@ export default function UserLoginPage() {
                                 required
                             />
                         </div>
-                        <div style={{ marginBottom: '28px' }}>
+                        <div style={{ marginBottom: '20px' }}>
                             <label style={labelStyle}>确认密码</label>
                             <input
                                 type="password"
@@ -260,6 +262,16 @@ export default function UserLoginPage() {
                                 placeholder="请再次输入密码"
                                 style={inputStyle}
                                 required
+                            />
+                        </div>
+                        <div style={{ marginBottom: '28px' }}>
+                            <label style={labelStyle}>邀请码 (选填)</label>
+                            <input
+                                type="text"
+                                value={referralCode}
+                                onChange={e => setReferralCode(e.target.value)}
+                                placeholder="如有邀请码请填写"
+                                style={inputStyle}
                             />
                         </div>
                     </>
