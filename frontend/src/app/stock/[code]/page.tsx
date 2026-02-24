@@ -154,6 +154,8 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     };
 
     useEffect(() => {
+        let active = true;
+
         // 请求开始前，彻底清空旧状态，防止闪现或双重显示旧数据
         setLoading(true);
         setQuote(null);
@@ -175,17 +177,21 @@ export default function StockDetailPage({ params }: { params: { code: string } }
 
                 if (res.status === 429) {
                     const errorData = await res.json();
-                    alert(`🚫 访问受限\n\n${errorData.detail}`);
-                    setError(errorData.detail);
-                    setLoading(false);
+                    if (active) {
+                        alert(`🚫 访问受限\n\n${errorData.detail}`);
+                        setError(errorData.detail);
+                        setLoading(false);
+                    }
                     return;
                 }
 
-                if (res.ok) setQuote(await res.json());
+                if (active && res.ok) setQuote(await res.json());
             } catch (e) {
                 console.error("Quote fetch error:", e);
-                setError("获取行情数据失败，请检查网络连接");
-                setLoading(false);
+                if (active) {
+                    setError("获取行情数据失败，请检查网络连接");
+                    setLoading(false);
+                }
             }
         }
 
@@ -193,7 +199,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         async function fetchKline() {
             try {
                 const res = await fetch(`http://localhost:8000/api/stock/kline/${params.code}`);
-                if (res.ok) setKline(await res.json());
+                if (active && res.ok) setKline(await res.json());
             } catch (e) { console.error("Kline fetch error:", e); }
         }
 
@@ -207,29 +213,34 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 }
                 const res = await fetch(`http://localhost:8000/api/stock/analysis/${params.code}${uid ? `?user_id=${uid}` : ''}`);
                 if (res.ok) {
-                    setAnalysis(await res.json());
-                    setAnalysisError(null);
+                    const data = await res.json();
+                    if (active) {
+                        setAnalysis(data);
+                        setAnalysisError(null);
+                    }
                 } else if (res.status === 429) {
                     const data = await res.json();
                     const detail = data.detail || "";
-                    if (detail.includes("每小时 20 次")) {
-                        setAnalysisError(`📊 已达到分析限额\n\n${detail}\n\nVip 会员每小时可享 20 次深度诊断权益。`);
-                    } else {
-                        setAnalysisError(detail || "访问太频繁了，请稍后再试。");
+                    if (active) {
+                        if (detail.includes("每小时 20 次")) {
+                            setAnalysisError(`📊 已达到分析限额\n\n${detail}\n\nVip 会员每小时可享 20 次深度诊断权益。`);
+                        } else {
+                            setAnalysisError(detail || "访问太频繁了，请稍后再试。");
+                        }
                     }
                 } else {
                     try {
                         const data = await res.json();
-                        setAnalysisError(data.detail || "智能诊断获取失败，请重试。");
+                        if (active) setAnalysisError(data.detail || "智能诊断获取失败，请重试。");
                     } catch (e) {
-                        setAnalysisError("服务器响应异常，请稍后重试。");
+                        if (active) setAnalysisError("服务器响应异常，请稍后重试。");
                     }
                 }
             } catch (e) {
                 console.error("Analysis fetch error:", e);
-                setAnalysisError("由于网络不稳定，智能诊断加载失败。");
+                if (active) setAnalysisError("由于网络不稳定，智能诊断加载失败。");
             } finally {
-                setLoading(false);
+                if (active) setLoading(false);
             }
         }
 
@@ -237,7 +248,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         async function fetchNews() {
             try {
                 const res = await fetch(`http://localhost:8000/api/stock/influential_news/${params.code}`);
-                if (res.ok) setNews(await res.json());
+                if (active && res.ok) setNews(await res.json());
             } catch (e) {
                 console.error("News fetch error:", e);
             }
@@ -247,6 +258,10 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         fetchKline();
         fetchAnalysis();
         fetchNews();
+
+        return () => {
+            active = false;
+        };
     }, [params.code]);
 
     if (!quote && loading) return (

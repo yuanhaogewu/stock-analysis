@@ -201,3 +201,13 @@ Import trace for requested module:
  ✓ Compiled /sectors in 210ms (819 modules)
  GET /stock/002335 200 in 288ms
  ✓ Compiled in 1054ms (1634 modules)
+ GET /stock/002335 200 in 292ms
+ ✓ Compiled in 837ms (1634 modules)
+ GET /stock/002335 200 in 294ms
+ GET /stock/002335 200 in 76ms
+ ✓ Compiled /manage in 389ms (819 modules)
+ GET /manage 200 in 523ms
+ ✓ Compiled /manage/dashboard in 157ms (819 modules)
+ GET /stock/002335 200 in 166ms
+ GET / 200 in 103ms
+ ✓ Compiled /pay in 317ms (824 modules)

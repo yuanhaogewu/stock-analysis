@@ -293,7 +293,21 @@ class StockDataManager:
         if self._is_updating_list: return
         self._is_updating_list = True
         try:
-            logger.info("Updating stock list via Sina API (comprehensive)...")
+            # 优先使用 EM 接口，因为它最全面且已经用于行情更新
+            logger.info("Updating stock list via EM (reliable)...")
+            data = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+            if data is not None and not data.empty:
+                df = data[['代码', '名称']].copy()
+                with self._lock:
+                    self._stock_list = df
+                    self._last_list_update = time.time()
+                logger.info(f"Stock list updated via EM: {len(df)} stocks.")
+                return
+        except Exception as e:
+            logger.error(f"Stock list update EM error: {e}")
+
+        try:
+            logger.info("Updating stock list via Sina API (fallback)...")
             url = "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=6000&sort=symbol&asc=1&node=hs_a&symbol=&_s_r_a=init"
             headers = {"Referer": "http://finance.sina.com.cn"}
             async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
@@ -601,23 +615,37 @@ async def get_market_rankings():
 
 @app.get("/api/stock/search")
 async def search_stock(keyword: str, background_tasks: BackgroundTasks):
-    stock_list = data_manager.get_stock_list_fast(background_tasks)
-    
-    if stock_list.empty:
-        spot_data = data_manager.get_spot_data_fast(background_tasks)
-        if not spot_data.empty:
-            stock_list = spot_data[['代码', '名称']]
-    
-    keyword = keyword.upper()
+    # 统一处理关键字：转大写，去除空格
+    keyword = keyword.strip().upper()
     results = []
-    if not stock_list.empty:
-        mask = stock_list['代码'].str.contains(keyword, na=False) | stock_list['名称'].str.contains(keyword, na=False)
-        results = stock_list[mask].head(10).to_dict(orient="records")
+
+    # 1. 尝试从主要代码表和实时数据中合并搜索
+    stock_list = data_manager.get_stock_list_fast(background_tasks)
+    spot_data = data_manager.get_spot_data_fast(background_tasks)
     
-    # If no results and keyword looks like a code, try on-demand fetch
-    if not results and keyword.isdigit() and len(keyword) >= 6:
+    # 构建搜索池
+    search_df = None
+    if not stock_list.empty:
+        search_df = stock_list[['代码', '名称']].copy()
+    if not spot_data.empty:
+        spot_list = spot_data[['代码', '名称']].copy()
+        if search_df is None:
+            search_df = spot_list
+        else:
+            search_df = pd.concat([search_df, spot_list]).drop_duplicates(subset=['代码'])
+
+    if search_df is not None and not search_df.empty:
+        # 兼容性处理：确保列名为字符串
+        search_df['代码'] = search_df['代码'].astype(str)
+        search_df['名称'] = search_df['名称'].astype(str)
+        
+        mask = (search_df['代码'].str.contains(keyword, na=False)) | \
+               (search_df['名称'].str.contains(keyword, na=False))
+        results = search_df[mask].head(15).to_dict(orient="records")
+    
+    # 2. 如果结果较少且看起来像是个完整的股票代码，尝试云端兜底抓取
+    if len(results) < 3 and keyword.isdigit() and len(keyword) == 6:
         try:
-            # Quick check via Tencent
             symbol = keyword
             if symbol.startswith('6'): full_symbol = "sh" + symbol
             elif symbol.startswith(('0', '3')): full_symbol = "sz" + symbol
@@ -762,6 +790,7 @@ async def get_deepseek_analysis(prompt: str):
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"},
+        "temperature": 0.0,
         "stream": False
     }
     
