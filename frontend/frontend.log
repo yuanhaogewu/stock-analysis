@@ -211,3 +211,21 @@ Import trace for requested module:
  GET /stock/002335 200 in 166ms
  GET / 200 in 103ms
  ✓ Compiled /pay in 317ms (824 modules)
+ GET / 200 in 74ms
+ ✓ Compiled /watchlist in 148ms (269 modules)
+ ✓ Compiled /stock/[code] in 136ms (828 modules)
+ GET /stock/603988 200 in 838ms
+ GET /stock/603988 200 in 98ms
+ GET /stock/603988 200 in 79ms
+ GET /stock/603988 200 in 82ms
+ ✓ Compiled in 1512ms (1636 modules)
+ ✓ Compiled in 377ms (1636 modules)
+ GET /stock/603988 200 in 174ms
+ ✓ Compiled in 336ms (1636 modules)
+ GET /stock/603988 200 in 57ms
+ ✓ Compiled /sectors in 236ms (821 modules)
+ GET /stock/002594 200 in 53ms
+ GET /stock/002594 200 in 96ms
+ ✓ Compiled in 582ms (1636 modules)
+ GET /stock/920088 200 in 81ms
+ GET /stock/002230 200 in 36ms

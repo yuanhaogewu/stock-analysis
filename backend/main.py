@@ -814,6 +814,53 @@ async def get_deepseek_analysis(prompt: str):
         logger.error(f"DeepSeek call error: {e}")
         raise e
 
+@app.get("/api/stock/visual_indicators/{symbol}")
+async def get_visual_indicators(symbol: str, background_tasks: BackgroundTasks):
+    """极速获取技术指标（不含 AI，用于 UI 先行显示）"""
+    quote = await _get_stock_quote_core(symbol, background_tasks)
+    df = await get_cached_kline(symbol)
+    
+    # 提取实时指标
+    pe = quote.get("市盈率") or quote.get("PE", 20.0)
+    pb = quote.get("市净率") or quote.get("PB", 2.0)
+    price = quote.get("最新价") or quote.get("price", 0.0)
+    prev_close = quote.get("昨收") or quote.get("prev_close", 0.0)
+    
+    try:
+        pe = float(pe) if pe and float(pe) > 0 else 20.0
+        pb = float(pb) if pb and float(pb) > 0 else 2.0
+        price = float(price) if price else 0.0
+        prev_close = float(prev_close) if prev_close else 0.0
+    except:
+        pe, pb, price, prev_close = 20.0, 2.0, 0.0, 0.0
+
+    quote_change = round((price - prev_close) / prev_close * 100, 2) if prev_close > 0 else 0.0
+    eps = round(price / pe, 2) if pe > 0 else 0.5
+    roe = round((pb / pe) * 100, 2) if pe > 0 else 12.0
+    debt_ratio = quote.get("负债率", 45.0)
+
+    vol_ratio = 1.0
+    if df is not None and len(df) >= 5:
+        df['vol_ma5'] = df['成交量'].rolling(5).mean()
+        last_vol = df.iloc[-1]['成交量']
+        ma5_vol = df.iloc[-1]['vol_ma5']
+        vol_ratio = round(last_vol / ma5_vol, 2) if ma5_vol > 0 else 1.0
+
+    # 本地规则评分
+    score = round(50 + (15 if price > (df['收盘'].rolling(20).mean().iloc[-1] if df is not None else price) else -15) + (10 if quote_change > 0 else -5), 1)
+    signal = "Buy" if score > 55 else "Sell" if score < 45 else "Neutral"
+
+    return {
+        "vol_ratio": vol_ratio,
+        "price_change": quote_change,
+        "signal": signal,
+        "pe": pe,
+        "pb": pb,
+        "roe": roe,
+        "eps": eps,
+        "debt_ratio": debt_ratio
+    }
+
 @app.get("/api/stock/analysis/{symbol}")
 async def analyze_stock(symbol: str, request: Request, background_tasks: BackgroundTasks, user_id: Optional[int] = None):
     """AI 深层诊断（计入详情页查询限额 + VIP频次限制）"""

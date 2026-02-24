@@ -83,7 +83,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     const [userId, setUserId] = useState<number | null>(null);
     const [isInWatchlist, setIsInWatchlist] = useState(false);
     const [analysisError, setAnalysisError] = useState<string | null>(null);
-
+    const [visualIndicators, setVisualIndicators] = useState<any>(null);
     useEffect(() => {
         const userToken = localStorage.getItem('user_token');
         if (userToken) {
@@ -160,6 +160,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         setLoading(true);
         setQuote(null);
         setAnalysis(null);
+        setVisualIndicators(null);
         setAnalysisError(null);
         setNews([]);
         setKline([]);
@@ -185,7 +186,11 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                     return;
                 }
 
-                if (active && res.ok) setQuote(await res.json());
+                if (active && res.ok) {
+                    setQuote(await res.json());
+                    // 只要行情回来了，就让骨架屏消失，优先显示基础界面
+                    setLoading(false);
+                }
             } catch (e) {
                 console.error("Quote fetch error:", e);
                 if (active) {
@@ -195,15 +200,31 @@ export default function StockDetailPage({ params }: { params: { code: string } }
             }
         }
 
-        // 2. Fetch K-Line
+        // 2. Fetch Visual Indicators (Fast Path - Numerical Only)
+        async function fetchVisualIndicators() {
+            try {
+                const res = await fetch(`http://localhost:8000/api/stock/visual_indicators/${params.code}`);
+                if (active && res.ok) {
+                    setVisualIndicators(await res.json());
+                    // 视觉指标回来也确保 loading 结束
+                    setLoading(false);
+                }
+            } catch (e) { console.error("Visual indicators fetch error:", e); }
+        }
+
+        // 3. Fetch K-Line
         async function fetchKline() {
             try {
                 const res = await fetch(`http://localhost:8000/api/stock/kline/${params.code}`);
-                if (active && res.ok) setKline(await res.json());
+                if (active && res.ok) {
+                    setKline(await res.json());
+                    // K线回来也确保 loading 结束
+                    setLoading(false);
+                }
             } catch (e) { console.error("Kline fetch error:", e); }
         }
 
-        // 3. Fetch AI Analysis (Low Priority, Slow)
+        // 4. Fetch AI Analysis (Low Priority, Slow)
         async function fetchAnalysis() {
             try {
                 const userToken = localStorage.getItem('user_token');
@@ -239,12 +260,10 @@ export default function StockDetailPage({ params }: { params: { code: string } }
             } catch (e) {
                 console.error("Analysis fetch error:", e);
                 if (active) setAnalysisError("由于网络不稳定，智能诊断加载失败。");
-            } finally {
-                if (active) setLoading(false);
             }
         }
 
-        // 4. Fetch Influential News
+        // 5. Fetch Influential News
         async function fetchNews() {
             try {
                 const res = await fetch(`http://localhost:8000/api/stock/influential_news/${params.code}`);
@@ -255,6 +274,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         }
 
         fetchQuote();
+        fetchVisualIndicators();
         fetchKline();
         fetchAnalysis();
         fetchNews();
@@ -805,21 +825,44 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                     <div className="card" style={{ padding: '32px', overflow: 'visible', borderTop: '4px solid var(--accent-green)' }}>
                         <h3 style={{ marginBottom: '24px', fontSize: '18px', fontWeight: '600' }}>📊 指标综合监测</h3>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-                            {renderIndicatorCard("量比", analysis?.indicators.vol_ratio, analysis?.indicators.vol_ratio! > 1.2 ? 'var(--accent-red)' : 'var(--text-primary)', 'vol_ratio', 'left')}
-                            {renderIndicatorCard("24H 涨跌", analysis?.indicators.price_change !== undefined ? `${analysis.indicators.price_change}%` : '---', analysis?.indicators.price_change! >= 0 ? "stock-up" : "stock-down", 'price_change')}
+                            {renderIndicatorCard(
+                                "量比",
+                                analysis?.indicators.vol_ratio ?? visualIndicators?.vol_ratio,
+                                (analysis?.indicators.vol_ratio ?? visualIndicators?.vol_ratio) > 1.2 ? 'var(--accent-red)' : 'var(--text-primary)',
+                                'vol_ratio',
+                                'left'
+                            )}
+                            {renderIndicatorCard(
+                                "24H 涨跌",
+                                (analysis?.indicators.price_change ?? visualIndicators?.price_change) !== undefined ? `${analysis?.indicators.price_change ?? visualIndicators?.price_change}%` : '---',
+                                (analysis?.indicators.price_change ?? visualIndicators?.price_change) >= 0 ? "stock-up" : "stock-down",
+                                'price_change'
+                            )}
                             {renderIndicatorCard(
                                 "建议评级",
-                                !analysis ? '---' : (analysis.signal === 'Buy' ? '看多' : analysis.signal === 'Sell' ? '看空' : '博弈'),
-                                !analysis ? 'var(--text-secondary)' : (analysis.signal === 'Buy' ? 'var(--accent-red)' : analysis.signal === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'),
+                                !(analysis || visualIndicators) ? '---' : ((analysis?.signal || visualIndicators?.signal) === 'Buy' ? '看多' : (analysis?.signal || visualIndicators?.signal) === 'Sell' ? '看空' : '博弈'),
+                                !(analysis || visualIndicators) ? 'var(--text-secondary)' : ((analysis?.signal || visualIndicators?.signal) === 'Buy' ? 'var(--accent-red)' : (analysis?.signal || visualIndicators?.signal) === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'),
                                 'signal',
                                 'right'
                             )}
 
-                            {renderIndicatorCard("市盈率 (PE)", analysis?.indicators.pe, 'var(--text-primary)', 'pe', 'left')}
-                            {renderIndicatorCard("市净率 (PB)", analysis?.indicators.pb, 'var(--text-primary)', 'pb')}
-                            {renderIndicatorCard("每股收益 (EPS)", analysis?.indicators.eps, 'var(--text-primary)', 'eps')}
-                            {renderIndicatorCard("净资产收益率 (ROE)", analysis?.indicators.roe !== undefined ? `${analysis.indicators.roe}%` : '---', 'var(--text-primary)', 'roe', 'right')}
-                            {renderIndicatorCard("资产负债率", analysis?.indicators.debt_ratio !== undefined ? `${analysis.indicators.debt_ratio}%` : '---', 'var(--text-primary)', 'debt_ratio', 'left')}
+                            {renderIndicatorCard("市盈率 (PE)", analysis?.indicators.pe ?? visualIndicators?.pe, 'var(--text-primary)', 'pe', 'left')}
+                            {renderIndicatorCard("市净率 (PB)", analysis?.indicators.pb ?? visualIndicators?.pb, 'var(--text-primary)', 'pb')}
+                            {renderIndicatorCard("每股收益 (EPS)", analysis?.indicators.eps ?? visualIndicators?.eps, 'var(--text-primary)', 'eps')}
+                            {renderIndicatorCard(
+                                "净资产收益率 (ROE)",
+                                (analysis?.indicators.roe ?? visualIndicators?.roe) !== undefined ? `${analysis?.indicators.roe ?? visualIndicators?.roe}%` : '---',
+                                'var(--text-primary)',
+                                'roe',
+                                'right'
+                            )}
+                            {renderIndicatorCard(
+                                "资产负债率",
+                                (analysis?.indicators.debt_ratio ?? visualIndicators?.debt_ratio) !== undefined ? `${analysis?.indicators.debt_ratio ?? visualIndicators?.debt_ratio}%` : '---',
+                                'var(--text-primary)',
+                                'debt_ratio',
+                                'left'
+                            )}
                         </div>
                     </div>
 
