@@ -2480,9 +2480,13 @@ async def remove_from_watchlist(item: WatchlistItem):
     conn.close()
     return {"success": True, "message": "已从自选移除"}
 
+# --- News Caching ---
+influential_news_cache = {}
+influential_news_cache_lock = Lock()
+
 @app.get("/api/stock/influential_news/{symbol}")
 async def get_influential_news(symbol: str):
-    """获取与股价密切相关的重大新闻事件（原实控人/舆情版块升级版）"""
+    """获取与股价密切相关的重要新闻事件并进行AI量化解读"""
     clean_symbol = "".join(filter(str.isdigit, symbol))
     market = ""
     symbol_lower = symbol.lower()
@@ -2496,34 +2500,35 @@ async def get_influential_news(symbol: str):
     
     full_symbol = f"{market}{clean_symbol}"
     
-    # 核心关键词（重大事件优先级排序）
-    keywords = [
-        '实际控制人', '实控人', '违规', '立案', '被查', '退市', '重组', '收购', '兼并', '转让', 
-        '大额订单', '中标', '突破', '签署', '战略合作', '扩产', '专利', '大幅预增', '扭亏', 
-        '减持', '增持', '董事长', '股权变更', '协议', '举报', '质押', '清算'
-    ]
+    import datetime
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    cache_key = f"{full_symbol}_{current_date}"
+    
+    with influential_news_cache_lock:
+        # 1. 检查是否存在当天的缓存，如有直接秒回
+        if cache_key in influential_news_cache:
+            return influential_news_cache[cache_key]
+            
+        # 2. 清理并非当天的旧缓存（过期保洁，防止内存泄露）
+        keys_to_delete = [k for k in influential_news_cache.keys() if not k.endswith(current_date)]
+        for k in keys_to_delete:
+            del influential_news_cache[k]
     
     all_raw_news = []
+    seen_urls = set()
+    seen_titles = set()
     
-    # 获取个股基础信息以提取简称
     stock_name = ""
-    controller_info = ""
     try:
         import requests
-        # 使用不信任环境变量的 Session 彻底绕过代理
         session = requests.Session()
         session.trust_env = False
-        
-        # 直接调用 EM 基础信息接口 (akshare 底层接口)
-        url_info = f"https://push2.eastmoney.com/api/qt/stock/get?secid={'1' if market=='sh' else '0'}.{clean_symbol}&fields=f57,f58,f116,f127,f128,f183,f184,f185,f186,f187,f188,f189,f190,f191,f192"
+        url_info = f"https://push2.eastmoney.com/api/qt/stock/get?secid={'1' if market=='sh' else '0'}.{clean_symbol}&fields=f58"
         r = session.get(url_info, timeout=5.0)
         if r.status_code == 200:
-            data = r.json().get('data', {})
-            stock_name = data.get('f58', '')
-            # 备注：不同接口字段不同，这里尝试获取常用字段或兜底
+            stock_name = r.json().get('data', {}).get('f58', '')
     except: pass
     
-    # 兜底：使用已有的 data_manager 获取名称
     if not stock_name:
         try:
             spot = data_manager.get_spot_data()
@@ -2531,154 +2536,180 @@ async def get_influential_news(symbol: str):
                 f = spot[spot['代码'] == clean_symbol]
                 if not f.empty: stock_name = f.iloc[0]['名称']
         except: pass
-    
-    # 如果依然拿不到，直接使用 _get_stock_quote_core (async)
-    if not stock_name:
-        try:
-            from fastapi import BackgroundTasks
-            q = await _get_stock_quote_core(symbol, BackgroundTasks())
-            stock_name = q.get('名称', '')
-        except: pass
-    
-    # 1. 优先使用新浪财经 API (获取更多原始数据)
-    try:
-        url = f"https://feed.mix.sina.com.cn/api/roll/get?pageid=155&lid=1686&num=100&page=1&symbol={full_symbol}"
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get('result', {}).get('status', {}).get('code') == 0:
-                    for item in data['result']['data']:
-                        all_raw_news.append({
-                            "title": item.get('title', ''),
-                            "content": item.get('summary', ''),
-                            "time": item.get('createtime', item.get('pubDate', '')),
-                            "source": item.get('media_name', '新浪财经'),
-                            "url": item.get('url', '')
-                        })
-    except Exception as e:
-        logger.warning(f"Sina news fetch failed for {symbol}: {e}")
 
-    # 2. 备源：新浪搜索接口 (按名称和代码双重搜索)
-    search_queries = [stock_name, clean_symbol] if stock_name else [clean_symbol]
-    for q in search_queries:
-        if not q: continue
+    # 1. 定义并发获取各个渠道新闻的异步任务
+    async def fetch_sina_vip():
+        news_list = []
         try:
-            search_url = f"https://search.sina.com.cn/api/search/news?q={urllib.parse.quote(q)}&t=news&n=30"
+            url_vip = f"http://vip.stock.finance.sina.com.cn/corp/go.php/vCB_AllNewsStock/symbol/{full_symbol}.phtml"
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(search_url)
+                resp = await client.get(url_vip, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"})
+                if resp.status_code == 200:
+                    t = resp.content.decode('gbk', 'ignore')
+                    import re
+                    match = re.search(r'<div class="datelist">(.*?)</div>', t, re.S)
+                    if match:
+                        list_str = match.group(1)
+                        items = re.findall(r'(\d{4}-\d{2}-\d{2})&nbsp;(\d{2}:\d{2})&nbsp;&nbsp;<a[^>]*href=[\'"]([^\'"]+)[\'"][^>]*>([^<]+)</a>', list_str)
+                        for date, time, u, title in items[:30]: # 最多取30条
+                            news_list.append({
+                                "title": title.strip(),
+                                "time": f"{date} {time}",
+                                "source": "新浪财经",
+                                "url": u,
+                                "is_direct": True
+                            })
+        except Exception as e:
+            logger.warning(f"Sina VIP stock news crawler failed: {e}")
+        return news_list
+
+    async def fetch_sina_feed():
+        news_list = []
+        try:
+            url = f"https://feed.mix.sina.com.cn/api/roll/get?pageid=155&lid=1686&num=30&page=1&symbol={full_symbol}"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
                 if resp.status_code == 200:
                     data = resp.json()
-                    # 根据实际搜索接口结构解析 (result.list 或 result.data)
-                    items = data.get('result', {}).get('list', []) or data.get('result', {}).get('data', [])
-                    for item in items:
-                        all_raw_news.append({
-                            "title": item.get('title', ''),
-                            "content": item.get('content', '') or item.get('summary', ''),
-                            "time": item.get('datetime', '') or item.get('pubDate', ''),
-                            "source": item.get('source', '新浪搜索'),
-                            "url": item.get('url', '')
-                        })
-        except: pass
+                    for item in data.get('result', {}).get('data', []):
+                        u = item.get('url', '')
+                        t = item.get('title', '')
+                        if (stock_name and stock_name in t) or (clean_symbol in t):
+                            news_list.append({
+                                "title": t,
+                                "time": item.get('createtime', item.get('pubDate', '')),
+                                "source": item.get('media_name', '聚合资讯'),
+                                "url": u,
+                                "is_direct": True
+                            })
+        except Exception as e:
+            logger.warning(f"Sina news feed failed: {e}")
+        return news_list
 
-    # 3. 兜底搜索：行业+宏观关键词 (仅当结果过少时)
-    if len(all_raw_news) < 5 and stock_name:
+    async def fetch_eastmoney_ann():
+        news_list = []
         try:
-            # 搜一些通用的宏观财经新闻
+            # 抓取最近15条股票官方公告
+            url = f"https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=15&page_index=1&ann_type=A&client_source=web&stock_list={clean_symbol}"
             async with httpx.AsyncClient(timeout=5.0) as client:
-                # 尝试一个更宽泛的 lid (155, 1)
-                macro_url = f"https://feed.mix.sina.com.cn/api/roll/get?pageid=155&lid=1641&num=40"
-                resp = await client.get(macro_url)
+                resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
                 if resp.status_code == 200:
-                    for item in resp.json().get('result', {}).get('data', []):
-                        all_raw_news.append({
-                            "title": item.get('title', ''),
-                            "content": item.get('summary', ''),
-                            "time": item.get('createtime', ''),
-                            "source": item.get('media_name', '新浪宏观'),
-                            "url": item.get('url', '')
+                    data = resp.json()
+                    list_data = data.get('data', {}).get('list', [])
+                    for i in list_data:
+                        t = i.get('title', '')
+                        if '摘要' in t or '提示' in t: continue # 过滤一些不太重要的摘要性质
+                        u = f"https://data.eastmoney.com/notices/detail/{clean_symbol}/{i.get('art_code')}.html"
+                        time_str = i.get('notice_date', '')[:10]
+                        news_list.append({
+                            "title": f"【公司公告】{t}",
+                            "time": f"{time_str} 00:00",
+                            "source": "东方财富",
+                            "url": u,
+                            "is_direct": True  # 公告绝对是第一手重要资料
                         })
-        except: pass
+        except Exception as e:
+            logger.warning(f"Eastmoney announcement fetch failed: {e}")
+        return news_list
 
-    if not all_raw_news: return []
+    # 2. 并发执行所有数据源抓取
+    results = await asyncio.gather(
+        fetch_sina_vip(),
+        fetch_sina_feed(),
+        fetch_eastmoney_ann(),
+        return_exceptions=True
+    )
+    
+    # 合并结果并去重
+    for res in results:
+        if isinstance(res, list):
+            for n in res:
+                u = n['url']
+                t = n['title']
+                if u and u not in seen_urls and t not in seen_titles:
+                    seen_urls.add(u)
+                    seen_titles.add(t)
+                    all_raw_news.append(n)
 
-    # 评分逻辑：实控人/重大违规权重极大
-    scored_news = []
-    seen_titles = set()
-    
-    # 关键词过滤增强：必须包含 stock_name 或 clean_symbol
-    # 去除名字中的空格（如 "万 科A" -> "万科A"）
-    clean_stock_name = stock_name.replace(" ", "") if stock_name else ""
-    
-    # 记录是否抓到了任何相关新闻
-    has_any_relevant = False
-    
-    for item in all_raw_news:
-        title = str(item.get('title', ''))
-        content = str(item.get('content', ''))
-        if not title: continue
+    if not all_raw_news:
+        return []
+
+    # 3. 排序和筛选出最重要的新闻送入 AI
+    priority_words = ['政策', '发改委', '突破', '大单', '中标', '业绩增', '净利润', '重组', '收购', '举牌', '立案', '违规', '退市']
+    for n in all_raw_news:
+        score = 0
+        if n.get('is_direct'): score += 50
+        for w in priority_words:
+            if w in n['title']:
+                score += 100
+        n['score'] = score
         
-        # 强制核心关联性校验：标题或内容必须包含股票名或代码
-        # 注意：禁止空字符串匹配 (clean_stock_name 必须长度 > 1)
-        is_relevant = False
-        if clean_symbol and clean_symbol in title: is_relevant = True
-        elif clean_stock_name and len(clean_stock_name) >= 2 and clean_stock_name in title: is_relevant = True
-        elif clean_stock_name and len(clean_stock_name) >= 2 and clean_stock_name in content: is_relevant = True
-        
-        if not is_relevant:
-            continue
+    all_raw_news.sort(key=lambda x: (x.get('score', 0), x.get('time', '')), reverse=True)
+    target_news = all_raw_news[:10] # 减少为取前10条以加快处理速度
+
+    # 5. 调用 AI 进行并发解读和打标签
+    # 将批量请求拆分为单个并发请求，大幅降低整体等待时间 (由于 LLM 生成单条JSON非常快)
+    system_prompt = "你是一位资深金融分析师。要求为单条股票新闻撰写极具指导意义的简短解读，辅助判断股价走势。禁止含糊其词或说废话，绝对禁止出现具体涨跌幅数字预测。必须附含清晰的态度判断。"
+    
+    async def interpret_single_news(n):
+        prompt = f"针对 {stock_name}({symbol}) 的新闻进行解读：\n"
+        prompt += f"标题：{n['title']}\n时间：{n['time']}\n\n"
+        prompt += "【输出要求】由于是单条，请直接返回一个只有两个字段的 JSON 对象（不要包装在 results 数组里）：\n"
+        prompt += "1. interpretation: 极具指导意义的解读（1-2句话）\n"
+        prompt += "2. tag: 只能选一项：利好、利空、重大利好、重大利空、中性\n"
+        try:
+            # 独立单条请求，减少单次生成时间
+            res = await get_deepseek_analysis(prompt, system_prompt)
+            tag = res.get('tag', '中性')
+            valid_tags = ['利好', '利空', '重大利好', '重大利空', '中性']
+            if tag not in valid_tags: tag = '中性'
+            return {
+                'url': n['url'],
+                'interpretation': res.get('interpretation', '该事件可能对后续股价走势产生潜在影响。'),
+                'tag': tag
+            }
+        except Exception as e:
+            logger.warning(f"Single news interpretation failed for {n['url']}: {e}")
+            return {
+                'url': n['url'],
+                'interpretation': '市场仍在吸收该消息影响，需结合后续资金异动密切关注。',
+                'tag': '中性'
+            }
+
+    try:
+        if target_news:
+            ai_results = await asyncio.gather(*(interpret_single_news(n) for n in target_news), return_exceptions=True)
+            mapping = {}
+            for res in ai_results:
+                if isinstance(res, dict) and 'url' in res:
+                    mapping[res['url']] = res
+
+            for n in target_news:
+                u = n['url']
+                if u in mapping:
+                    n['interpretation'] = mapping[u]['interpretation']
+                    n['tag'] = mapping[u]['tag']
+                else:
+                    n['interpretation'] = '当前服务繁忙，AI 深度解读暂未就绪。'
+                    n['tag'] = '中性'
+    except Exception as e:
+        logger.error(f"AI news batch interpretation failed: {e}")
+        for n in target_news:
+            n['interpretation'] = '当前服务繁忙，AI 深度解读暂未就绪。'
+            n['tag'] = '中性'
             
-        has_any_relevant = True
-        # 去重 (特征提取：标题前 15 个非空字符)
-        title_tag = "".join(title.split())[:15]
-        if title_tag in seen_titles: continue
-        seen_titles.add(title_tag)
+    # 清理非必要字段并按时间倒序
+    for n in target_news:
+        if 'is_direct' in n: del n['is_direct']
+        if 'score' in n: del n['score']
         
-        score = 10 # 只要相关，默认底分
-        for kw in keywords:
-            if kw in title:
-                if any(x in kw for x in ["实控人", "控制人", "违规", "立案", "公告", "大股东", "大额订单", "突破"]): score += 40
-                else: score += 20
-            elif kw in content:
-                score += 5
+    target_news.sort(key=lambda x: x.get('time', ''), reverse=True)
         
-        scored_news.append((item, score))
-            
-    # 按照评分和时间降序排列
-    scored_news.sort(key=lambda x: (x[1], x[0].get('time', '')), reverse=True)
-    
-    result = []
-    for item, score in scored_news:
-        result.append({
-            "title": item.get('title'),
-            "time": item.get('time'),
-            "source": item.get('source'),
-            "url": item.get('url'),
-            "score": score
-        })
-        if len(result) >= 15: break # 增加到最多 15 条
-    
-    # 如果依然为空，显示兜底信息 (确保 UI 不开天窗)
-    if not result:
-        display_name = stock_name if stock_name else symbol
-        result.append({
-            "title": f"系统监测：{display_name} 近期暂无涉及实控人变更、重大违规或足以逆转趋势的特大新闻事件",
-            "time": datetime.datetime.now().strftime("%Y-%m-%d"),
-            "source": "芯思维实时监测",
-            "url": "#",
-            "score": 100
-        })
-        # 即使是兜底，也增加一条关于控制权的正面确认
-        if controller_info:
-             result.append({
-                "title": f"股东背景：当前公司实际控制人为 {controller_info}，架构稳定",
-                "time": datetime.datetime.now().strftime("%Y-%m-%d"),
-                "source": "定期报告",
-                "url": "#",
-                "score": 50
-            })
-            
-    return result
+    # 将完整的最终数据放入当日缓存池中
+    with influential_news_cache_lock:
+        influential_news_cache[cache_key] = target_news
+        
+    return target_news
 
 
 # --- Payment & VIP Routes ---
