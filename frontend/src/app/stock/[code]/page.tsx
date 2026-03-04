@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import KLineChart from "@/components/KLineChart";
+import FundFlowTable from "@/components/FundFlowTable";
 
 interface StockQuote {
     名称: string;
@@ -13,6 +14,8 @@ interface StockQuote {
     开盘: number;
     昨收: number;
     换手率: number;
+    总市值: number;
+    振幅: number;
 }
 
 interface Analysis {
@@ -36,16 +39,14 @@ interface Analysis {
             sell: string;
             position: string;
         };
-        scenarios: {
-            optimistic: string;
-            neutral: string;
-            pessimistic: string;
-        };
+
         trend_judgment?: Array<{
             period: string;
             trend: string;
             explanation: string;
         }>;
+        support_price?: string | number;
+        resistance_price?: string | number;
         chart_signals?: Array<{
             date: string;
             type: 'buy' | 'sell';
@@ -61,7 +62,13 @@ interface Analysis {
         eps?: number;
         roe?: number;
         debt_ratio?: number;
+        rsi?: number;
     };
+    key_events?: Array<{
+        event: string;
+        interpretation: string;
+        source_url?: string;
+    }>;
 }
 
 interface NewsItem {
@@ -84,6 +91,25 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     const [isInWatchlist, setIsInWatchlist] = useState(false);
     const [analysisError, setAnalysisError] = useState<string | null>(null);
     const [visualIndicators, setVisualIndicators] = useState<any>(null);
+    const [showIntensityTooltip, setShowIntensityTooltip] = useState(false);
+    const [fundFlow, setFundFlow] = useState<any>(null);
+    const [fundFlowLoading, setFundFlowLoading] = useState(true);
+
+    // 性能优化：缓存 K线数据和图表参数，避免父组件重绘导致的图表闪烁/重复加载
+    const klineData = useMemo(() => {
+        if (!kline || kline.length === 0) return [];
+        const d = [...kline];
+        // 将 AI 信号平滑植入 K线数据中 (如果有)
+        if (analysis?.structured_analysis?.chart_signals) {
+            (d as any).signals = analysis.structured_analysis.chart_signals;
+        }
+        return d;
+    }, [kline, analysis]);
+
+    const chartSymbol = useMemo(() => {
+        return quote?.名称 || params.code;
+    }, [quote?.名称, params.code]);
+
     useEffect(() => {
         const userToken = localStorage.getItem('user_token');
         if (userToken) {
@@ -273,11 +299,27 @@ export default function StockDetailPage({ params }: { params: { code: string } }
             }
         }
 
+        // 6. Fetch Fund Flow
+        async function fetchFundFlow() {
+            try {
+                setFundFlowLoading(true);
+                const res = await fetch(`http://localhost:8000/api/stock/fund_flow/${params.code}`);
+                if (active && res.ok) {
+                    setFundFlow(await res.json());
+                }
+            } catch (e) {
+                console.error("Fund flow fetch error:", e);
+            } finally {
+                if (active) setFundFlowLoading(false);
+            }
+        }
+
         fetchQuote();
         fetchVisualIndicators();
         fetchKline();
         fetchAnalysis();
         fetchNews();
+        fetchFundFlow();
 
         return () => {
             active = false;
@@ -316,7 +358,6 @@ export default function StockDetailPage({ params }: { params: { code: string } }
             </div>
         </div>
     );
-
     const getIntensityColor = (intensity: number) => {
         if (intensity >= 70) return 'var(--accent-red)';
         if (intensity <= 30) return 'var(--accent-green)';
@@ -348,12 +389,12 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 "用法：寻找分值持续上升的标的，通常意味着机构或大资金正在吸筹。"
             ]
         },
-        signal: {
-            title: "建议评级 —— AI 综合诊断结论",
+        rsi: {
+            title: "RSI 指标 —— 衡量买卖力量强弱",
             content: [
-                "含义：DeepSeek 引擎结合量价关系、趋势和筹码给出的决策建议。",
-                "标签：‘看多’（多头占优）、‘看空’（空头占优）、‘博弈’（多空对峙）。",
-                "策略：在‘看多’且评分高时关注，‘博弈’期应保持轻仓或观望。"
+                "原理：比较一段时期内的平均收盘涨幅和跌幅，取值 0-100。",
+                "规则：> 70 为“超买区”，买方力量过强需警惕回调；< 30 为“超卖区”，跌势过猛可能反弹。",
+                "新手用法：主要看是否背离。若价格新高而 RSI 低于前高，说明涨不动了，可能要跌。"
             ]
         },
         pe: {
@@ -401,6 +442,20 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     const renderIndicatorCard = (label: string, value: string | number | undefined, color: string, key?: string, align: 'left' | 'right' | 'center' = 'center') => {
         const interpretation = key ? indicatorInterpretations[key] : null;
 
+        // 处理负数及异常值显示
+        let displayValue: any = value;
+        let displayColor = color;
+
+        if (typeof value === 'number') {
+            if (key === 'pe' && value <= 0) {
+                displayValue = '亏损';
+                displayColor = 'var(--accent-red)';
+            } else if (key === 'pb' && value <= 0) {
+                displayValue = '资不抵债';
+                displayColor = 'var(--accent-red)';
+            }
+        }
+
         return (
             <div
                 className="card interactive indicator-tooltip-trigger"
@@ -413,8 +468,8 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 }}
             >
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px', fontWeight: '600' }}>{label}</div>
-                <div style={{ fontSize: '24px', fontWeight: '800', color: color }}>
-                    {value !== undefined ? value : (loading ? <span className="spinner-small" style={{ display: 'inline-block', width: '20px', height: '20px' }}></span> : '---')}
+                <div style={{ fontSize: displayValue === '资不抵债' ? '18px' : '24px', fontWeight: '800', color: displayColor }}>
+                    {displayValue !== undefined ? displayValue : (loading ? <span className="spinner-small" style={{ display: 'inline-block', width: '20px', height: '20px' }}></span> : '---')}
                 </div>
 
                 {interpretation && (
@@ -450,201 +505,332 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         );
 
         if (!analysis?.structured_analysis) return (
-            <div style={{ color: 'var(--text-secondary)', padding: '20px', textAlign: 'center' }}>
-                <div className="spinner-small" style={{ margin: '0 auto 12px' }}></div>
-                正在为您生成深度研报...
+            <div className="generating-report-box animate-fadeInUp">
+                <div className="ai-icon-pulse">🤖</div>
+                <div className="generating-text">
+                    正在为您生成深度研报
+                    <div className="loading-dots">
+                        <span>.</span><span>.</span><span>.</span>
+                    </div>
+                </div>
             </div>
         );
 
         const { structured_analysis } = analysis;
+        const fullText = (structured_analysis.detailed_summary || '').trim();
+        const lines = fullText.split('\n').map(l => l.trim()).filter(l => l);
+
+        // 1. 结构化提取内容库
+        const topLogicPoints: string[] = [];
+        const additionalDescription: string[] = [];
+        const futureTrendStages: string[] = [];
+        const strategicInsights: string[] = [];
+        let mainAnalysisTitle = "";
+        let inTrendSection = false;
+
+        const statusLine = lines[0] || "";
+
+        lines.slice(1).forEach(line => {
+            if (line.includes('技术面分析')) {
+                mainAnalysisTitle = line.replace(/[:：]/g, '').trim();
+                inTrendSection = false;
+            } else if (line.includes('未来趋势演判') || line.includes('未来走势推演')) {
+                inTrendSection = true;
+            } else if (inTrendSection) {
+                if (line.match(/^[🔵🔴🟢🟡•\-📌阶段]/) || line.trim()) {
+                    const cleaned = line.replace(/^[•\-]\s*/, '').trim();
+                    if (cleaned) {
+                        if (cleaned.match(/(短期|中期|长期)/)) {
+                            futureTrendStages.push(cleaned);
+                        } else if (cleaned.match(/(风险|空仓|持有|不建议|操作策略)/)) {
+                            strategicInsights.push(cleaned);
+                        } else {
+                            futureTrendStages.push(cleaned);
+                        }
+                    }
+                }
+            } else if (/^(关键点|要点|[1-9]️⃣)/.test(line) || (/^[1-9][.、\s]/.test(line))) {
+                if (!line.includes('分析')) {
+                    const cleanedPoint = line.replace(/^(关键点[一二三]|要点|操盘|实战|[1-9]️⃣|[1-9][.、\s])[:：]?/, '').trim();
+                    if (cleanedPoint) topLogicPoints.push(cleanedPoint);
+                }
+            } else if (!line.includes('结论') && !line.startsWith('•') && !line.startsWith('-')) {
+                additionalDescription.push(line);
+            }
+        });
+
+        const pillarConfig = [
+            { key: '大结构分析', icon: '🏗️', color: 'var(--accent-red)' },
+            { key: '均线结构分析', icon: '📈', color: 'var(--accent-blue)' },
+            { key: '资金面分析', icon: '💰', color: '#fadb14' }
+        ];
+
+        const pillars = pillarConfig.map(config => {
+            let contentLines: string[] = [];
+            let startIndex = lines.findIndex(l => l.includes(config.key));
+            if (startIndex !== -1) {
+                for (let j = startIndex + 1; j < lines.length; j++) {
+                    const line = lines[j];
+                    if (pillarConfig.some(c => line.includes(c.key))) break;
+                    if (line.includes('未来走势推演') || line.includes('未来趋势推演')) break;
+                    contentLines.push(line);
+                }
+            }
+            return startIndex !== -1 ? { ...config, content: contentLines } : null;
+        }).filter((p): p is (typeof pillarConfig[0] & { content: string[] }) => p !== null);
 
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {/* 核心结论 - 结构升级版 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* 1. 核心综述卡片 */}
                 <div
-                    className="card interactive fadeInUp"
                     style={{
-                        backgroundColor: 'var(--bg-base)',
-                        padding: '20px 24px',
-                        borderRadius: '16px',
-                        border: '1px solid var(--border-color)',
-                        position: 'relative',
-                        boxShadow: 'none'
+                        background: `linear-gradient(135deg, ${analysis?.signal === 'Buy' ? 'rgba(255, 69, 58, 0.08)' : analysis?.signal === 'Sell' ? 'rgba(50, 215, 75, 0.08)' : 'rgba(0, 122, 255, 0.08)'} 0%, var(--bg-card) 100%)`,
+                        padding: '24px',
+                        borderRadius: '20px',
+                        border: `1px solid ${analysis?.signal === 'Buy' ? 'rgba(255, 69, 58, 0.2)' : analysis?.signal === 'Sell' ? 'rgba(50, 215, 75, 0.2)' : 'rgba(0, 122, 255, 0.2)'}`,
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '16px',
+                        transition: 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)',
+                        cursor: 'default'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'translateY(-4px) scale(1.01)';
+                        e.currentTarget.style.boxShadow = '0 12px 30px rgba(0,0,0,0.08)';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.03)';
                     }}
                 >
-                    <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        marginBottom: '16px'
-                    }}>
-                        <span style={{ fontSize: '18px' }}>🎯</span>
-                        <span style={{
-                            color: '#ff4d4f',
-                            fontSize: '16.5px',
-                            fontWeight: '800'
-                        }}>一句话结论</span>
+                    {statusLine && (
+                        <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--text-primary)', lineHeight: '1.5' }}>
+                            {statusLine}
+                        </div>
+                    )}
+
+                    {(topLogicPoints.length > 0 || additionalDescription.length > 0) && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+                            {additionalDescription.slice(0, 1).map((desc, idx) => (
+                                <div key={`desc-${idx}`} style={{ fontSize: '13px', color: 'var(--accent-blue)', fontWeight: '600', marginBottom: '4px' }}>
+                                    💡 {desc}
+                                </div>
+                            ))}
+                            {topLogicPoints.map((point, idx) => (
+                                <div key={`point-${idx}`} style={{ fontSize: '14px', lineHeight: '1.6', color: 'var(--text-secondary)', fontWeight: '600', display: 'flex', gap: '8px' }}>
+                                    <span style={{ color: 'var(--accent-blue)', minWidth: '16px' }}>•</span>
+                                    <span style={{ flex: 1 }}>{point.trim()}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* B. 深度技术维度分析 (横排子卡) */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
+                    {mainAnalysisTitle && (
+                        <div style={{
+                            fontSize: '11px',
+                            fontWeight: '800',
+                            color: 'var(--text-secondary)',
+                            paddingLeft: '4px',
+                            textTransform: 'uppercase',
+                            letterSpacing: '1px',
+                            opacity: 0.6,
+                            marginBottom: '2px'
+                        }}>
+                            {mainAnalysisTitle}
+                        </div>
+                    )}
+                    {pillars.map((pillar) => (
+                        <div
+                            key={pillar.key}
+                            style={{
+                                padding: '16px 20px',
+                                background: 'var(--bg-base)',
+                                borderLeft: `5px solid ${pillar.color}`,
+                                borderRadius: '14px',
+                                border: '1px solid var(--border-color)',
+                                borderLeftWidth: '5px',
+                                transition: 'all 0.3s ease',
+                                cursor: 'default'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.transform = 'translateY(-5px) scale(1.02)';
+                                e.currentTarget.style.boxShadow = '0 15px 35px rgba(0,0,0,0.12)';
+                                e.currentTarget.style.borderColor = pillar.color;
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                                e.currentTarget.style.boxShadow = 'none';
+                                e.currentTarget.style.borderColor = 'var(--border-color)';
+                            }}
+                        >
+                            <div style={{
+                                fontSize: '13px',
+                                fontWeight: '800',
+                                color: pillar.color,
+                                marginBottom: '10px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px'
+                            }}>
+                                <span>{pillar.icon}</span>
+                                {pillar.key}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {pillar.content.map((text, idx) => {
+                                    const isBullet = text.startsWith('•') || text.startsWith('-');
+                                    const isConclusion = text.includes('结论');
+                                    return (
+                                        <div key={idx} style={{
+                                            fontSize: isConclusion ? '14.5px' : '14px',
+                                            lineHeight: '1.8',
+                                            color: isConclusion ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                            fontWeight: isConclusion ? '700' : '400',
+                                            paddingLeft: isBullet ? '12px' : '0',
+                                            marginTop: isConclusion ? '6px' : '0'
+                                        }}>
+                                            {text.replace(/^[1-3]️⃣\s*/, '')}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 4. 战术执行区间 (支撑/阻力) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <div
+                        style={{
+                            background: 'rgba(50, 215, 75, 0.06)',
+                            padding: '18px',
+                            borderRadius: '16px',
+                            border: '1px solid rgba(50, 215, 75, 0.15)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            transition: 'all 0.3s ease',
+                            cursor: 'default'
+                        }}
+                        onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = 'translateY(-4px) scale(1.03)';
+                            e.currentTarget.style.background = 'rgba(50, 215, 75, 0.1)';
+                            e.currentTarget.style.boxShadow = '0 10px 25px rgba(50, 215, 75, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                            e.currentTarget.style.background = 'rgba(50, 215, 75, 0.06)';
+                            e.currentTarget.style.boxShadow = 'none';
+                        }}
+                    >
+                        <div style={{ fontSize: '11px', color: 'var(--accent-green)', fontWeight: '700', marginBottom: '4px' }}>🛡️ 支撑防御区</div>
+                        <div style={{ fontSize: '24px', fontWeight: '900', color: 'var(--accent-green)' }}>{structured_analysis.support_price || '--'}</div>
                     </div>
-
-                    <div style={{
-                        fontSize: '18.5px',
-                        fontWeight: '700',
-                        color: 'var(--text-primary)',
-                        lineHeight: '1.5',
-                        marginBottom: '16px'
-                    }}>
-                        {structured_analysis.short_summary || structured_analysis.conclusion}
-                    </div>
-
-                    <div style={{
-                        height: '1px',
-                        backgroundColor: 'rgba(255,255,255,0.06)',
-                        marginBottom: '12px'
-                    }} />
-
-                    <div style={{
-                        fontSize: '13.5px',
-                        color: 'var(--text-secondary)',
-                        lineHeight: '1.7',
-                        fontWeight: '400',
-                        opacity: 0.8
-                    }}>
-                        {structured_analysis.detailed_summary || analysis.detail_advice}
+                    <div
+                        style={{
+                            background: 'rgba(255, 69, 58, 0.06)',
+                            padding: '18px',
+                            borderRadius: '16px',
+                            border: '1px solid rgba(255, 69, 58, 0.15)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            transition: 'all 0.3s ease',
+                            cursor: 'default'
+                        }}
+                        onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = 'translateY(-4px) scale(1.03)';
+                            e.currentTarget.style.background = 'rgba(255, 69, 58, 0.1)';
+                            e.currentTarget.style.boxShadow = '0 10px 25px rgba(255, 69, 58, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                            e.currentTarget.style.background = 'rgba(255, 69, 58, 0.06)';
+                            e.currentTarget.style.boxShadow = 'none';
+                        }}
+                    >
+                        <div style={{ fontSize: '11px', color: 'var(--accent-red)', fontWeight: '700', marginBottom: '4px' }}>⚡ 阻力预警区</div>
+                        <div style={{ fontSize: '24px', fontWeight: '900', color: 'var(--accent-red)' }}>{structured_analysis.resistance_price || '--'}</div>
                     </div>
                 </div>
 
-                {/* 趋势判断 - 重新设计：合并列、动态配色与交互增强 */}
-                {structured_analysis.trend_judgment && (
-                    <div className="card interactive fadeInUp" style={{
-                        padding: '0',
-                        backgroundColor: 'var(--bg-base)',
-                        boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-                        border: '1px solid var(--border-color)',
-                        overflow: 'hidden',
-                        borderRadius: '16px'
-                    }}>
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '12px',
-                            padding: '20px 24px',
-                            borderBottom: '1px solid var(--border-color)',
-                            background: 'linear-gradient(90deg, rgba(0,122,255,0.05) 0%, transparent 100%)'
+
+
+                {/* 6. 未来走势推演 (高清路线图) */}
+                {futureTrendStages.length > 0 && (
+                    <div style={{
+                        marginTop: '12px',
+                        padding: '24px',
+                        background: 'linear-gradient(135deg, rgba(0, 122, 255, 0.05) 0%, var(--bg-card) 100%)',
+                        border: '1px solid rgba(0, 122, 255, 0.15)',
+                        borderRadius: '24px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '18px',
+                        transition: 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)'
+                    }}
+                        onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = 'translateY(-6px)';
+                            e.currentTarget.style.boxShadow = '0 20px 40px rgba(0, 122, 255, 0.05)';
+                            e.currentTarget.style.borderColor = 'rgba(0, 122, 255, 0.3)';
+                        }}
+                        onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
+                            e.currentTarget.style.borderColor = 'rgba(0, 122, 255, 0.15)';
                         }}>
-                            <span style={{ fontSize: '24px' }}>📉</span>
-                            <span style={{ color: 'var(--accent-blue)', fontSize: '18px', fontWeight: '800', letterSpacing: '0.5px' }}>趋势判断</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: '800', color: 'var(--accent-blue)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                            <span style={{ fontSize: '18px' }}>🧭</span> 趋势预判高清路线图
                         </div>
-                        <div style={{ width: '100%', fontSize: '13px' }}>
-                            <div style={{
-                                display: 'grid',
-                                gridTemplateColumns: '150px 1fr',
-                                padding: '12px 24px',
-                                backgroundColor: 'rgba(0,122,255,0.03)',
-                                color: 'var(--text-secondary)',
-                                fontWeight: '700',
-                                textTransform: 'uppercase',
-                                fontSize: '11px',
-                                letterSpacing: '1px'
-                            }}>
-                                <div>周期</div>
-                                <div>判断结果</div>
-                            </div>
-                            {structured_analysis.trend_judgment?.map((item: any, idx: number, arr: any[]) => {
-                                // 动态配色与高级视觉效果
-                                const getTrendStyle = (text: string) => {
-                                    const isPositive = /涨|强|突破|向好|支撑|回归|多方/.test(text);
-                                    const isNegative = /跌|弱|风险|偏弱|压力|空头|离场/.test(text);
-                                    const isUnclear = /不明|不确定|观望|观察/.test(text);
 
-                                    if (isPositive) return {
-                                        bg: 'linear-gradient(135deg, #ff4e50 0%, #f92a3c 100%)',
-                                        glow: '0 4px 15px rgba(255,78,80,0.4)',
-                                        icon: '📈',
-                                        light: 'rgba(255,78,80,0.08)'
-                                    };
-                                    if (isNegative) return {
-                                        bg: 'linear-gradient(135deg, #52c41a 0%, #389e0d 100%)',
-                                        glow: '0 4px 15px rgba(82,196,26,0.4)',
-                                        icon: '📉',
-                                        light: 'rgba(82,196,26,0.08)'
-                                    };
-                                    if (isUnclear) return {
-                                        bg: 'linear-gradient(135deg, #8c8c8c 0%, #595959 100%)',
-                                        glow: '0 4px 15px rgba(140,140,140,0.4)',
-                                        icon: '🔍',
-                                        light: 'rgba(140,140,140,0.08)'
-                                    };
-                                    // 默认/不好不坏 (蓝色)
-                                    return {
-                                        bg: 'linear-gradient(135deg, #1890ff 0%, #0050b3 100%)',
-                                        glow: '0 4px 15px rgba(24,144,255,0.4)',
-                                        icon: '⚖️',
-                                        light: 'rgba(24,144,255,0.08)'
-                                    };
-                                };
-
-                                const style = getTrendStyle(item.trend);
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {futureTrendStages.map((stage, idx) => {
+                                const [title, ...detailParts] = stage.split(/[：:]/);
+                                const detail = detailParts.join('：');
+                                const isBlue = title.includes('🔵') || title.match(/(短期|中期|长期|1周|3个月|1年)/);
 
                                 return (
-                                    <div key={idx} style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: '120px 1fr',
-                                        padding: '16px 20px',
-                                        borderBottom: idx === arr.length - 1 ? 'none' : '1px solid var(--border-color)',
-                                        alignItems: 'center',
-                                        transition: 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)',
-                                        cursor: 'default',
-                                        position: 'relative',
-                                        overflow: 'hidden'
-                                    }}
-                                        onMouseEnter={(e) => {
-                                            e.currentTarget.style.backgroundColor = 'rgba(0,122,255,0.06)';
-                                            const box = e.currentTarget.querySelector('.exp-box') as HTMLElement;
-                                            if (box) box.style.transform = 'translateY(-2px)';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            e.currentTarget.style.backgroundColor = 'transparent';
-                                            const box = e.currentTarget.querySelector('.exp-box') as HTMLElement;
-                                            if (box) box.style.transform = 'translateY(0)';
-                                        }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', zIndex: 1 }}>
-                                            <div style={{ color: 'var(--text-primary)', fontWeight: '800', fontSize: '14px' }}>{item.period}</div>
-                                            <div style={{ display: 'flex' }}>
-                                                <span style={{
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                    gap: '6px',
-                                                    padding: '4px 10px',
-                                                    borderRadius: '6px',
-                                                    background: style.bg,
-                                                    color: '#fff',
-                                                    fontSize: '11px',
-                                                    fontWeight: '900',
-                                                    boxShadow: style.glow,
-                                                    textShadow: '0 1px 2px rgba(0,0,0,0.2)',
-                                                    whiteSpace: 'nowrap',
-                                                    letterSpacing: '0.3px'
-                                                }}>
-                                                    {style.icon} {item.trend}
-                                                </span>
+                                    <div key={idx} style={{ display: 'flex', gap: '16px', position: 'relative' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: '40px' }}>
+                                            <div className="roadmap-step-number" style={{
+                                                width: '24px',
+                                                height: '24px',
+                                                borderRadius: '12px',
+                                                background: 'var(--accent-blue)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: '11px',
+                                                fontWeight: '800',
+                                                color: '#fff',
+                                                zIndex: 2,
+                                                boxShadow: `0 4px 10px rgba(0, 122, 255, 0.2)`
+                                            }}>
+                                                {idx + 1}
                                             </div>
+                                            {idx < futureTrendStages.length - 1 && (
+                                                <div style={{ width: '2px', flex: 1, background: `linear-gradient(180deg, var(--accent-blue) 0%, var(--border-color) 100%)`, margin: '4px 0', opacity: 0.3 }}></div>
+                                            )}
                                         </div>
-                                        <div className="exp-box" style={{
-                                            color: 'var(--text-primary)',
-                                            fontSize: '14px',
-                                            lineHeight: '1.6',
-                                            padding: '10px 16px',
-                                            backgroundColor: style.light,
-                                            backdropFilter: 'blur(8px)',
-                                            borderRadius: '12px',
-                                            border: `1px solid ${style.light.replace('0.08', '0.15')}`,
-                                            fontWeight: '400',
-                                            boxShadow: '0 4px 15px rgba(0,0,0,0.04)',
-                                            marginLeft: '8px',
-                                            transition: 'all 0.3s ease',
-                                            zIndex: 1
-                                        }}>
-                                            {item.explanation}
+                                        <div style={{ flex: 1, paddingBottom: idx === futureTrendStages.length - 1 ? '0' : '24px' }}>
+                                            <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--accent-blue)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {title}
+                                            </div>
+                                            {detail && (
+                                                <div className="roadmap-text-box" style={{ fontSize: '13.5px', color: 'var(--text-secondary)', lineHeight: '1.6', background: 'var(--bg-card)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                                                    {detail.trim().split(/[；;。]/).filter(t => t.trim()).map((p, i) => (
+                                                        <div key={i} style={{ marginBottom: '4px', display: 'flex', gap: '6px' }}>
+                                                            {p.includes('📌') || p.includes('🎯') ? null : <span style={{ opacity: 0.5 }}>•</span>}
+                                                            <span>{p.trim()}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -653,67 +839,215 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                     </div>
                 )}
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                    <div className="card interactive" style={{ padding: '16px', backgroundColor: 'var(--bg-base)', boxShadow: 'none' }}>
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '11px', marginBottom: '10px', fontWeight: '600' }}>技术形态</div>
-                        <div style={{ fontSize: '13px', lineHeight: '1.6', color: 'var(--text-primary)' }}>{structured_analysis.tech_status}</div>
-                    </div>
-                    <div className="card interactive" style={{ padding: '16px', backgroundColor: 'var(--bg-base)', boxShadow: 'none' }}>
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '11px', marginBottom: '10px', fontWeight: '600' }}>资金行为推断</div>
-                        <div style={{ fontSize: '13px', fontWeight: 'bold', color: getIntensityColor(analysis.intensity), marginBottom: '8px' }}>
-                            {structured_analysis.main_force.inference}
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                            当前阶段：<span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{structured_analysis.main_force.stage}</span>
-                        </div>
-                    </div>
-                </div>
+                {/* 7. 战术化操盘策略 (独立存在，压缩空间) */}
+                {strategicInsights.length > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginTop: '12px' }}>
+                        {strategicInsights.map((insight, idx) => {
+                            const [title, ...detailParts] = insight.split(/[：:]/);
+                            const detail = detailParts.join('：');
+                            const isRed = title.includes('🔴') || title.includes('风险') || title.includes('不建议');
+                            const isGreen = title.includes('🟢') || title.includes('空仓');
+                            const isYellow = title.includes('🟡') || title.includes('持');
 
-                <div className="card interactive" style={{ padding: '16px', backgroundColor: 'var(--bg-base)', boxShadow: 'none' }}>
-                    <div style={{ color: 'var(--text-secondary)', fontSize: '11px', marginBottom: '12px', fontWeight: '600' }}>资金行为证据链</div>
-                    <ul style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: 0, listStyle: 'none' }}>
-                        {structured_analysis.main_force.evidence.map((item: string, i: number) => (
-                            <li key={i} style={{
-                                fontSize: '12px',
-                                color: 'var(--text-primary)',
-                                backgroundColor: 'var(--bg-card)',
-                                padding: '8px 12px',
-                                borderRadius: '8px',
-                                border: '1px solid var(--border-color)'
-                            }}>
-                                • {item}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
+                            const color = isRed ? 'var(--accent-red)' : isGreen ? 'var(--accent-green)' : isYellow ? '#ffc107' : 'var(--accent-blue)';
+                            const bgColor = isRed ? 'rgba(255, 69, 58, 0.05)' : isGreen ? 'rgba(50, 215, 75, 0.05)' : isYellow ? 'rgba(255, 193, 7, 0.05)' : 'rgba(0, 122, 255, 0.05)';
 
-                <div className="card interactive" style={{ padding: '16px', backgroundColor: 'var(--bg-base)', borderTop: '2px solid #ed8936', boxShadow: 'none' }}>
-                    <div style={{ color: '#ed8936', fontSize: '11px', fontWeight: 'bold', marginBottom: '12px' }}>操盘建议 (条件触发)</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
-                            <span style={{ color: 'var(--accent-red)', fontWeight: 'bold', marginRight: '4px' }}>[买入触发]</span>
-                            {structured_analysis.trading_plan.buy}
-                        </div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
-                            <span style={{ color: 'var(--accent-green)', fontWeight: 'bold', marginRight: '4px' }}>[卖出风控]</span>
-                            {structured_analysis.trading_plan.sell}
-                        </div>
-                        <div style={{ marginTop: '4px', fontSize: '12px', padding: '10px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                            <span style={{ color: 'var(--text-secondary)', fontWeight: '600' }}>仓位策略：</span>
-                            <span style={{ color: 'var(--text-primary)' }}>{structured_analysis.trading_plan.position}</span>
-                        </div>
+                            return (
+                                <div key={idx} style={{
+                                    padding: '16px',
+                                    borderRadius: '20px',
+                                    background: bgColor,
+                                    border: `1px solid ${color}22`,
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '8px'
+                                }}>
+                                    <div style={{ fontSize: '13px', fontWeight: '800', color: color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        {title}
+                                    </div>
+                                    {detail && (
+                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                                            {detail.trim().split(/[；;。]/).map((p, i) => (
+                                                <div key={i}>{p.trim() && `• ${p.trim()}`}</div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
-                </div>
+                )}
+                {/* 6. 执行决策逻辑 */}
+                <div
+                    style={{
+                        padding: '24px',
+                        background: 'var(--bg-card)',
+                        borderRadius: '20px',
+                        border: '1px solid var(--border-color)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '16px',
+                        transition: 'all 0.3s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent-blue)';
+                        e.currentTarget.style.boxShadow = '0 12px 30px rgba(0,0,0,0.06)';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                        e.currentTarget.style.boxShadow = 'none';
+                    }}
+                >
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        Strategy Engine • 操盘量化执行建议
+                    </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
-                    {Object.entries(structured_analysis.scenarios).map(([key, value]) => (
-                        <div key={key} className="card interactive" style={{ padding: '10px', backgroundColor: 'var(--bg-base)', boxShadow: 'none', border: '1px solid var(--border-color)' }}>
-                            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: '700' }}>
-                                {key === 'optimistic' ? '🚀 乐观' : key === 'neutral' ? '⚖️ 中性' : '⚠️ 悲观'}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+                        <div
+                            style={{ padding: '16px', background: 'var(--bg-base)', borderRadius: '16px', border: '1px solid var(--border-color)', transition: 'all 0.3s ease' }}
+                            onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent-blue)'}
+                            onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
+                        >
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                🕵️ 主力操盘画像
                             </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-primary)', lineHeight: '1.4' }}>{value as string}</div>
+                            <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--accent-blue)', marginBottom: '2px' }}>{structured_analysis.main_force?.stage || '蓄势博弈'}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '500', opacity: 0.8 }}>{structured_analysis.main_force?.inference || '稳健运行'}</div>
                         </div>
-                    ))}
+                        <div
+                            style={{
+                                padding: '16px',
+                                background: 'var(--bg-base)',
+                                borderRadius: '16px',
+                                border: '1px solid var(--border-color)',
+                                transition: 'all 0.4s ease',
+                                position: 'relative'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.borderColor = 'var(--accent-blue)';
+                                setShowIntensityTooltip(true);
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.borderColor = 'var(--border-color)';
+                                setShowIntensityTooltip(false);
+                            }}
+                        >
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                ⚡ 量化攻击强度
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '8px' }}>
+                                <div style={{ fontSize: '18px', fontWeight: '900', color: analysis.intensity > 60 ? 'var(--accent-red)' : analysis.intensity < 40 ? 'var(--accent-green)' : 'var(--accent-blue)' }}>
+                                    {analysis.intensity > 60 ? '积极进攻' : analysis.intensity < 40 ? '空仓观望' : '中性待机'}
+                                </div>
+                                <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--text-secondary)', opacity: 0.6 }}>
+                                    {analysis.intensity}%
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+                                <div style={{ height: '5px', borderRadius: '3px', background: analysis.intensity >= 20 ? 'var(--accent-green)' : 'rgba(0,0,0,0.05)', transition: 'all 0.3s ease' }}></div>
+                                <div style={{ height: '5px', borderRadius: '3px', background: analysis.intensity >= 50 ? 'var(--accent-blue)' : 'rgba(0,0,0,0.05)', transition: 'all 0.3s ease' }}></div>
+                                <div style={{ height: '5px', borderRadius: '3px', background: analysis.intensity >= 80 ? 'var(--accent-red)' : 'rgba(0,0,0,0.05)', transition: 'all 0.3s ease' }}></div>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px', opacity: 0.7 }}>多维度量化模型实时推算</div>
+
+                            {/* 大白话弹出窗 */}
+                            {showIntensityTooltip && (
+                                <div style={{
+                                    position: 'absolute',
+                                    bottom: '105%',
+                                    right: '0',
+                                    width: '240px',
+                                    background: 'var(--bg-card)',
+                                    padding: '16px',
+                                    borderRadius: '16px',
+                                    boxShadow: '0 12px 36px rgba(0,0,0,0.15)',
+                                    border: '1px solid var(--border-color)',
+                                    zIndex: 100,
+                                    fontSize: '13px',
+                                    lineHeight: '1.6',
+                                    color: 'var(--text-primary)',
+                                    animation: 'fadeInUp 0.3s ease-out'
+                                }}>
+                                    <div style={{ fontWeight: '800', marginBottom: '8px', color: 'var(--accent-blue)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        💬 大白话解读
+                                    </div>
+                                    {analysis.intensity > 60 ? (
+                                        <div style={{ color: 'var(--text-secondary)' }}>
+                                            <span style={{ color: 'var(--accent-red)', fontWeight: '700' }}>积极进攻：</span>
+                                            当前买方力量非常强，就像大家都在抢着买。如果你手里有余钱，可以考虑跟着主力进场试试。
+                                        </div>
+                                    ) : analysis.intensity < 40 ? (
+                                        <div style={{ color: 'var(--text-secondary)' }}>
+                                            <span style={{ color: 'var(--accent-green)', fontWeight: '700' }}>空仓观望：</span>
+                                            现在卖出的人比较多，市场有点冷落或者在下跌。新手最好先管住手，等行情稳了再看。
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: 'var(--text-secondary)' }}>
+                                            <span style={{ color: 'var(--accent-blue)', fontWeight: '700' }}>中性待机：</span>
+                                            现在买的和卖的差不多，行情有些纠结。先不急着买也别急着卖，适合静静关注，等待方向变化。
+                                        </div>
+                                    )}
+                                    <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--accent-blue)', fontWeight: '600' }}>
+                                        💡 小贴士：数字越高代表大家买入的意愿越猛！
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
+                        <div className="signal-card signal-card-buy" style={{
+                            padding: '16px 20px',
+                            background: 'rgba(255, 69, 58, 0.05)',
+                            borderRadius: '14px',
+                            border: '1px solid rgba(255, 69, 58, 0.1)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px'
+                        }}>
+                            <div className="signal-icon-wrapper" style={{
+                                width: '32px',
+                                height: '32px',
+                                borderRadius: '8px',
+                                background: 'var(--accent-red)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'white',
+                                fontSize: '16px'
+                            }}>🚀</div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '11px', color: 'var(--accent-red)', fontWeight: '800', marginBottom: '2px', textTransform: 'uppercase' }}>买点触发信号 (Signal Buy)</div>
+                                <div style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: '600' }}>{structured_analysis.trading_plan?.buy}</div>
+                            </div>
+                        </div>
+
+                        <div className="signal-card signal-card-sell" style={{
+                            padding: '16px 20px',
+                            background: 'rgba(50, 215, 75, 0.05)',
+                            borderRadius: '14px',
+                            border: '1px solid rgba(50, 215, 75, 0.1)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px'
+                        }}>
+                            <div className="signal-icon-wrapper" style={{
+                                width: '32px',
+                                height: '32px',
+                                borderRadius: '8px',
+                                background: 'var(--accent-green)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'white',
+                                fontSize: '16px'
+                            }}>📉</div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '11px', color: 'var(--accent-green)', fontWeight: '800', marginBottom: '2px', textTransform: 'uppercase' }}>风控卖点建议 (Signal Sell)</div>
+                                <div style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: '600' }}>{structured_analysis.trading_plan?.sell}</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         );
@@ -777,50 +1111,85 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                 <div style={{
                     display: 'grid',
                     gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: '24px 48px',
+                    gap: '12px 48px',
                     fontSize: '14px',
                     borderLeft: '1px solid var(--border-color)',
                     paddingLeft: '48px'
                 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span className="secondary-text">成交量</span>
-                        <span style={{ fontWeight: '600', fontSize: '16px', color: 'var(--text-primary)' }}>
-                            {quote ? (quote.成交量 / 1000000).toFixed(2) : '0.00'}万手
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>
+                            {quote && quote.成交量 > 0 ? (quote.成交量 / 1000000).toFixed(2) + '万手' : '---'}
                         </span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span className="secondary-text">成交额</span>
-                        <span style={{ fontWeight: '600', fontSize: '16px', color: 'var(--text-primary)' }}>
-                            {quote ? (quote.成交额 / 100000000).toFixed(2) : '0.00'}亿元
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>
+                            {quote && quote.成交额 > 0 ? (quote.成交额 / 100000000).toFixed(2) : '---'}亿元
                         </span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span className="secondary-text">最高价</span>
-                        <span className="stock-up" style={{ fontWeight: '600', fontSize: '16px' }}>{quote?.最高}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="secondary-text">总市值</span>
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>
+                            {quote && quote.总市值 > 0 ? quote.总市值 + '亿元' : '---'}
+                        </span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span className="secondary-text">最低价</span>
-                        <span className="stock-down" style={{ fontWeight: '600', fontSize: '16px' }}>{quote?.最低}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="secondary-text">换手率</span>
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>
+                            {quote && quote.换手率 > 0 ? quote.换手率.toFixed(2) + '%' : '---'}
+                        </span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span className="secondary-text">今开盘</span>
-                        <span style={{ fontWeight: '600', fontSize: '16px', color: 'var(--text-primary)' }}>{quote?.开盘}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="secondary-text">振幅</span>
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>
+                            {quote && quote.振幅 > 0 ? quote.振幅.toFixed(2) + '%' : '---'}
+                        </span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span className="secondary-text">昨收盘</span>
-                        <span style={{ fontWeight: '600', fontSize: '16px', color: 'var(--text-primary)' }}>{quote?.昨收}</span>
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>{quote?.昨收 || '---'}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="secondary-text">今开盘</span>
+                        <span style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text-primary)' }}>
+                            {quote && quote.开盘 > 0 ? quote.开盘 : '---'}
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="secondary-text">最高价</span>
+                        <span className="stock-up" style={{ fontWeight: '600', fontSize: '15px' }}>
+                            {quote && quote.最高 > 0 ? quote.最高 : '---'}
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="secondary-text">最低价</span>
+                        <span className="stock-down" style={{ fontWeight: '600', fontSize: '15px' }}>
+                            {quote && quote.最低 > 0 ? quote.最低 : '---'}
+                        </span>
                     </div>
                 </div>
             </header>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 400px', gap: '24px', alignItems: 'start' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div className="card" style={{ padding: '32px', borderTop: '4px solid var(--accent-blue)' }}>
-                        <KLineChart
-                            data={Object.assign([...kline], { signals: analysis?.structured_analysis?.chart_signals })}
-                            symbol={quote?.名称 || params.code}
-                        />
+                    <div className="card" style={{ padding: '24px', position: 'relative', overflow: 'hidden' }}>
+                        {kline.length > 0 ? (
+                            <KLineChart
+                                data={klineData}
+                                symbol={chartSymbol}
+                                supportPrice={analysis?.structured_analysis?.support_price}
+                                resistancePrice={analysis?.structured_analysis?.resistance_price}
+                            />
+                        ) : (
+                            <div style={{ height: '600px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                                <div className="loading-spinner" style={{ marginRight: '10px' }}></div>
+                                加载行情数据中...
+                            </div>
+                        )}
                     </div>
+
+                    <FundFlowTable data={fundFlow} loading={fundFlowLoading} />
 
                     <div className="card" style={{ padding: '32px', overflow: 'visible', borderTop: '4px solid var(--accent-green)' }}>
                         <h3 style={{ marginBottom: '24px', fontSize: '18px', fontWeight: '600' }}>📊 指标综合监测</h3>
@@ -839,10 +1208,10 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                                 'price_change'
                             )}
                             {renderIndicatorCard(
-                                "建议评级",
-                                !(analysis || visualIndicators) ? '---' : ((analysis?.signal || visualIndicators?.signal) === 'Buy' ? '看多' : (analysis?.signal || visualIndicators?.signal) === 'Sell' ? '看空' : '博弈'),
-                                !(analysis || visualIndicators) ? 'var(--text-secondary)' : ((analysis?.signal || visualIndicators?.signal) === 'Buy' ? 'var(--accent-red)' : (analysis?.signal || visualIndicators?.signal) === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'),
-                                'signal',
+                                "RSI (14)",
+                                (analysis?.indicators.rsi ?? visualIndicators?.rsi) ?? '---',
+                                (analysis?.indicators.rsi ?? visualIndicators?.rsi) > 70 ? 'var(--accent-red)' : ((analysis?.indicators.rsi ?? visualIndicators?.rsi) < 30 ? 'var(--accent-green)' : 'var(--text-primary)'),
+                                'rsi',
                                 'right'
                             )}
 
@@ -869,7 +1238,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                     <div className="card" style={{ padding: '32px', borderTop: '4px solid #ed8936' }}>
                         <h3 style={{ marginBottom: '24px', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span style={{ fontSize: '20px' }}>📰</span>
-                            核心影响事件监测
+                            重要新闻事件
                         </h3>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {news.length > 0 ? (
@@ -906,7 +1275,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                                         <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)', lineHeight: '1.4' }}>
                                             {item.title}
                                         </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                        <div style={{ display: 'flex', justifySelf: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-secondary)' }}>
                                             <div style={{ display: 'flex', gap: '8px' }}>
                                                 <span>{item.source}</span>
                                                 <span>{item.time}</span>
@@ -917,37 +1286,28 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                                 ))
                             ) : (
                                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)', fontSize: '14px' }}>
-                                    暂未在大数据池中监测到显著影响股价的实控人相关事件
+                                    暂未在大数据池中监测到足以显著影响股价的重大新闻事件
                                 </div>
                             )}
                         </div>
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div className="card glass" style={{ padding: '28px', borderTop: `4px solid ${analysis?.signal === 'Buy' ? 'var(--accent-red)' : analysis?.signal === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'}` }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>🚀 AI智能分析报告</h3>
-                            <span style={{ fontSize: '10px', color: 'var(--accent-blue)', backgroundColor: 'rgba(0,122,255,0.1)', padding: '3px 10px', borderRadius: '20px', fontWeight: '700', letterSpacing: '0.05em' }}>AI 实时计算</span>
+                <div className="card" style={{ padding: '20px', borderTop: `4px solid ${analysis?.signal === 'Buy' ? 'var(--accent-red)' : analysis?.signal === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <span style={{ fontSize: '24px' }}>🚀</span>
+                            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '800' }}>AI 智能分析报告</h3>
                         </div>
-
-                        {renderAnalysisSection()}
-
-                        <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
-                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', textAlign: 'center', lineHeight: '1.8' }}>
-                                * 本报告基于历史量价行为概率模型推断，不构成投资建议。股市具有高度不确定性，请决策前充分评估风险。
-                            </div>
-                        </div>
+                        <span style={{ fontSize: '11px', color: 'var(--accent-blue)', backgroundColor: 'rgba(0,122,255,0.08)', padding: '4px 12px', borderRadius: '20px', fontWeight: '700' }}>Deepseek实时分析</span>
                     </div>
 
-                    <div className="card" style={{ background: 'var(--bg-base)', border: '1px dashed var(--border-color)', borderTop: '4px solid var(--accent-blue)', boxShadow: 'none' }}>
-                        <h3 style={{ fontSize: '14px', marginBottom: '12px', fontWeight: '600' }}>📊 投研纪律提示</h3>
-                        <ul className="secondary-text" style={{ paddingLeft: '20px', lineHeight: '2' }}>
-                            <li>拒绝冲动交易，仅在触发条件满足时执行；</li>
-                            <li>严格执行止损，保护本金是生存的第一法则；</li>
-                            <li>不预测底部，不幻想顶部，顺势而为；</li>
-                            <li>仓位管理决定生存质量，切勿单仓重仓。</li>
-                        </ul>
+                    {renderAnalysisSection()}
+
+                    <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', textAlign: 'center', lineHeight: '1.8' }}>
+                            * 本报告基于历史量价行为概率模型推断，不构成投资建议。股市具有高度不确定性，请决策前充分评估风险。
+                        </div>
                     </div>
                 </div>
             </div>

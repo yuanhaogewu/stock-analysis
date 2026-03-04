@@ -14,9 +14,11 @@ interface KLineData {
 interface Props {
     data: KLineData[];
     symbol: string;
+    supportPrice?: number | string;
+    resistancePrice?: number | string;
 }
 
-const KLineChart: React.FC<Props> = ({ data, symbol }) => {
+const KLineChart: React.FC<Props> = ({ data, symbol, supportPrice, resistancePrice }) => {
     const chartRef = useRef<HTMLDivElement>(null);
     const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
@@ -33,10 +35,35 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
         return () => observer.disconnect();
     }, []);
 
-    useEffect(() => {
-        if (!chartRef.current || data.length === 0) return;
+    const chartInstance = useRef<echarts.ECharts | null>(null);
 
-        const myChart = echarts.init(chartRef.current);
+    // 1. 初始化图表实例 (仅执行一次)
+    useEffect(() => {
+        if (!chartRef.current) return;
+
+        // 如果已经存在实例，先销毁
+        if (chartInstance.current) {
+            chartInstance.current.dispose();
+        }
+
+        chartInstance.current = echarts.init(chartRef.current);
+
+        const handleResize = () => {
+            chartInstance.current?.resize();
+        };
+        window.addEventListener('resize', handleResize);
+
+        return () => {
+            window.removeEventListener('resize', handleResize);
+            chartInstance.current?.dispose();
+            chartInstance.current = null;
+        };
+    }, []); // 仅在组件挂载时初始化
+
+    // 2. 响应数据、主题或标题的变化进行局部更新
+    useEffect(() => {
+        if (!chartInstance.current || data.length === 0) return;
+
         const isDark = theme === 'dark';
         const colors = {
             text: isDark ? '#ffffff' : '#1a1a1a',
@@ -53,7 +80,6 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
         const dates = data.map(item => item.日期);
         const values = data.map(item => [item.开盘, item.收盘, item.最低, item.最高]);
 
-        // Calculate Moving Averages
         const calculateMA = (dayCount: number) => {
             const result = [];
             for (let i = 0, len = data.length; i < len; i++) {
@@ -70,14 +96,12 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
             return result;
         };
 
-        // Simple MACD Calculation for display
         const calculateMACD = () => {
             const ema12: number[] = [];
             const ema26: number[] = [];
             const diff: number[] = [];
             const dea: number[] = [];
             const macd: number[] = [];
-
             let e12 = data[0].收盘;
             let e26 = data[0].收盘;
 
@@ -88,7 +112,6 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                 ema26.push(e26);
                 const d = e12 - e26;
                 diff.push(d);
-
                 if (i === 0) {
                     dea.push(d);
                 } else {
@@ -96,7 +119,6 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                 }
                 macd.push((diff[i] - dea[i]) * 2);
             });
-
             return { diff, dea, macd };
         };
 
@@ -104,12 +126,13 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
 
         const option: echarts.EChartsOption = {
             backgroundColor: 'transparent',
+            animation: data.length < 500, // 数据太多时关闭动画以提高性能
             title: [
                 { text: `${symbol} K线技术分析`, left: 'center', top: '10', textStyle: { color: colors.text, fontSize: 18, fontWeight: 'bold' } },
                 {
                     text: '{bar|} 成交量 (Volume)',
                     left: '2%',
-                    top: '58%',
+                    top: '54%',
                     textStyle: {
                         color: colors.text,
                         fontSize: 14,
@@ -127,7 +150,7 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                 {
                     text: '{bar|} MACD 指标',
                     left: '2%',
-                    top: '80%',
+                    top: '74%',
                     textStyle: {
                         color: colors.text,
                         fontSize: 14,
@@ -140,6 +163,19 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                                 borderRadius: 2
                             }
                         }
+                    }
+                },
+                {
+                    text: '视图缩放',
+                    left: '88.5%', // 滑块结束于 88% (100-12)，将其放在其右侧
+                    top: '89.2%',  // 与滑块 (top: 88%) 垂直对齐
+                    textStyle: {
+                        color: '#2979ff',
+                        fontSize: 12,
+                        fontWeight: 'bold',
+                        backgroundColor: 'rgba(41, 121, 255, 0.2)',
+                        padding: [4, 8],
+                        borderRadius: 4
                     }
                 }
             ],
@@ -186,14 +222,14 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                 data: ['日K', 'MA5', 'MA10', 'MA20', 'MA60', 'MACD', 'DIFF', 'DEA'],
                 inactiveColor: isDark ? '#555' : '#ccc',
                 textStyle: { color: colors.text, fontSize: 12 },
-                top: '35',
-                tooltip: { show: true }
+                bottom: 0,
+                left: 'center'
             },
             axisPointer: { link: [{ xAxisIndex: 'all' }] },
             grid: [
-                { left: '8%', right: '5%', top: '50', height: '45%' },
-                { left: '8%', right: '5%', top: '65%', height: '12%' },
-                { left: '8%', right: '5%', top: '85%', height: '10%' }
+                { left: '8%', right: '12%', top: '40', height: '42%' },
+                { left: '8%', right: '12%', top: '58%', height: '12%' },
+                { left: '8%', right: '12%', top: '78%', height: '10%' }
             ],
             xAxis: [
                 { type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false, lineStyle: { color: colors.line } }, splitLine: { show: false }, axisLabel: { color: colors.secondaryText }, gridIndex: 0 },
@@ -207,7 +243,7 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
             ],
             dataZoom: [
                 { type: 'inside', xAxisIndex: [0, 1, 2], start: 70, end: 100 },
-                { show: true, xAxisIndex: [0, 1, 2], type: 'slider', top: '95%', start: 70, end: 100, textStyle: { color: colors.secondaryText } }
+                { show: true, xAxisIndex: [0, 1, 2], type: 'slider', top: '88%', start: 70, end: 100, textStyle: { color: colors.secondaryText } }
             ],
             series: [
                 {
@@ -221,7 +257,114 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                         borderColor0: '#00c853'
                     },
                     xAxisIndex: 0,
-                    yAxisIndex: 0
+                    yAxisIndex: 0,
+                    markPoint: {
+                        symbol: 'circle',
+                        symbolSize: 14, // 放大点，从 8 增加到 14
+                        label: {
+                            show: true,
+                            fontSize: 14,
+                            lineHeight: 20,
+                            fontWeight: 'bold',
+                            color: '#fff',
+                            backgroundColor: 'rgba(41, 121, 255, 0.95)', // 稍微调亮蓝色
+                            borderColor: 'rgba(255, 255, 255, 0.5)',
+                            borderWidth: 1.5,
+                            borderRadius: 8,
+                            padding: [8, 12],
+                            position: 'top',
+                            distance: 12,
+                            shadowColor: 'rgba(0, 0, 0, 0.5)',
+                            shadowBlur: 10,
+                            shadowOffsetX: 2,
+                            shadowOffsetY: 4,
+                            formatter: function (param: any) {
+                                if (!param || !param.value) return '';
+                                const str = param.value.toString();
+                                if (str.length <= 11) return str;
+
+                                // 优先在标点符号处换行
+                                const breakPoint = str.search(/[，,。！!？? ]/);
+                                if (breakPoint > 3 && breakPoint < 11) {
+                                    const line1 = str.substring(0, breakPoint + 1);
+                                    let line2 = str.substring(breakPoint + 1);
+                                    if (line2.length > 11) line2 = line2.substring(0, 10) + '...';
+                                    return line1 + '\n' + line2;
+                                }
+
+                                // 否则强制10个字符换行
+                                const line1 = str.substring(0, 10);
+                                let line2 = str.substring(10);
+                                if (line2.length > 11) line2 = line2.substring(0, 10) + '...';
+                                return line1 + '\n' + line2;
+                            }
+                        },
+                        data: (data as any).signals ? (data as any).signals.map((s: any) => {
+                            const dateIndex = dates.indexOf(s.date);
+                            if (dateIndex === -1) return null;
+
+                            const kItem = data[dateIndex];
+                            const isBuy = s.type === 'buy';
+                            // 修正位置：如果是买入信号，放在最低价；卖出信号，放在最高价，避免空悬
+                            const accuratePrice = isBuy ? kItem.最低 : kItem.最高;
+
+                            const isNearEnd = dateIndex >= dates.length - 8;
+                            const isNearStart = dateIndex <= 8;
+
+                            return {
+                                name: s.title,
+                                coord: [s.date, accuratePrice],
+                                value: s.title,
+                                label: {
+                                    position: isNearEnd ? 'left' : (isNearStart ? 'right' : (isBuy ? 'bottom' : 'top')),
+                                    distance: 12,
+                                    offset: isNearEnd ? [-10, 0] : (isNearStart ? [10, 0] : [0, 0])
+                                },
+                                itemStyle: {
+                                    color: isBuy ? '#2979ff' : '#2979ff', // 统一使用蓝色，但可以根据类型微调
+                                    borderColor: '#fff',
+                                    borderWidth: 2,
+                                    shadowBlur: 15,
+                                    shadowColor: 'rgba(41, 121, 255, 0.8)'
+                                }
+                            };
+                        }).filter((i: any) => i !== null) : []
+                    },
+                    markLine: {
+                        symbol: ['none', 'none'],
+                        data: [
+                            supportPrice ? {
+                                yAxis: typeof supportPrice === 'string' ? parseFloat(supportPrice) : supportPrice,
+                                name: '支撑位',
+                                lineStyle: { color: '#ff5252', type: 'dashed', width: 2 },
+                                label: {
+                                    show: true,
+                                    position: 'end',
+                                    formatter: '支撑位 {c}',
+                                    color: '#ff5252',
+                                    fontWeight: 'bold',
+                                    backgroundColor: 'rgba(255, 82, 82, 0.1)',
+                                    padding: [4, 8],
+                                    borderRadius: 4
+                                }
+                            } : null,
+                            resistancePrice ? {
+                                yAxis: typeof resistancePrice === 'string' ? parseFloat(resistancePrice) : resistancePrice,
+                                name: '压力位',
+                                lineStyle: { color: '#00c853', type: 'dashed', width: 2 },
+                                label: {
+                                    show: true,
+                                    position: 'end',
+                                    formatter: '压力位 {c}',
+                                    color: '#00c853',
+                                    fontWeight: 'bold',
+                                    backgroundColor: 'rgba(0, 200, 83, 0.1)',
+                                    padding: [4, 8],
+                                    borderRadius: 4
+                                }
+                            } : null
+                        ].filter(item => item !== null) as any
+                    }
                 },
                 { name: 'MA5', type: 'line', data: calculateMA(5), smooth: true, itemStyle: { color: isDark ? '#fff' : '#1a1a1a' }, lineStyle: { opacity: 0.8 }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
                 { name: 'MA10', type: 'line', data: calculateMA(10), smooth: true, itemStyle: { color: '#ffea00' }, lineStyle: { opacity: 0.8 }, xAxisIndex: 0, yAxisIndex: 0, symbol: 'none' },
@@ -238,7 +381,7 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
                     }
                 },
                 {
-                    name: 'MACP', // Corrected name for MACD bar series to avoid legend conflict if needed, though legend item is 'MACD'
+                    name: 'MACD',
                     type: 'bar',
                     xAxisIndex: 2,
                     yAxisIndex: 2,
@@ -250,17 +393,9 @@ const KLineChart: React.FC<Props> = ({ data, symbol }) => {
             ]
         };
 
-        myChart.setOption(option);
-
-        // Resize handler
-        const handleResize = () => myChart.resize();
-        window.addEventListener('resize', handleResize);
-
-        return () => {
-            window.removeEventListener('resize', handleResize);
-            myChart.dispose();
-        };
-    }, [data, symbol, theme]);
+        // 使用 notMerge: true 确保新数据完全替换旧数据，防止重叠
+        chartInstance.current.setOption(option, true);
+    }, [data, symbol, theme, supportPrice, resistancePrice]);
 
     return (
         <div style={{ position: 'relative' }}>

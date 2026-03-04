@@ -132,6 +132,18 @@ def init_database():
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+
+    # 创建分析结果缓存表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analysis_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            date TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_analysis_cache_symbol_date ON analysis_cache (symbol, date)')
     
     # 插入默认管理员账号
     default_password = hashlib.sha256("Xinsiwei2026@".encode()).hexdigest()

@@ -5,6 +5,7 @@ interface RecommendStock {
     name: string;
     code: string;
     reason: string;
+    change?: number;
 }
 
 interface SectorData {
@@ -19,91 +20,59 @@ export default function SectorsPage() {
     const [loading, setLoading] = useState(true);
     const [expandedSector, setExpandedSector] = useState<string | null>(null);
 
+    // 获取板块列表
     useEffect(() => {
-        // 生成20只推荐股票的辅助函数
-        const generateStocks = (sectorName: string): RecommendStock[] => {
-            const sectoralData: Record<string, { names: string[], baseCodes: string[], deepReasons: string[] }> = {
-                "半导体": {
-                    names: ["中芯国际", "韦尔股份", "闻泰科技", "北方华创", "兆易创新", "紫光国微", "卓胜微", "圣邦股份", "澜起科技", "中微公司", "时代电气", "华润微", "长电科技", "通富微电", "华天科技", "南大光电", "晶方科技", "士兰微", "沪硅产业", "龙芯中科"],
-                    baseCodes: ["688981", "603501", "600745", "002371", "603986", "002049", "300782", "300661", "688008", "688012", "688187", "688396", "600584", "002156", "002185", "300346", "603005", "600460", "688126", "688047"],
-                    deepReasons: [
-                        "作为国内晶圆代工龙头，目前先进制程产能利用率回升，在HBM存储及高端AI芯片国产化浪潮下，具有不可替代的战略地位。财务表现稳健，资本开支计划显示其对行业复苏信心极强。",
-                        "在全球智能手机市场复苏及车载CIS（图像传感器）需求爆发的双重驱动下，公司高像素产品占比不断提升，盈利结构持续优化，正逐步从手机供应链向汽车电子巨头转型。",
-                        "国产半导体设备领域的领军者，刻蚀机、薄膜沉积设备已在主流代工厂实现大规模量产。随着国内新增晶圆线建设加速，其在手订单金额创历史新高，技术壁垒极高，护城河深厚。",
-                        "全球领先的内存接口芯片供应商，其DDR5内存接口及配套芯片已进入放量期。随着AI服务器及超大规模中心对高速互联需求的激增，公司在高性能存储领域的市场份额有望进一步扩张。"
-                    ]
-                },
-                "新能源汽车": {
-                    names: ["比亚迪", "宁德时代", "赛力斯", "亿纬锂能", "天齐锂业", "赣锋锂业", "长安汽车", "广汽集团", "长城汽车", "上汽集团", "拓普集团", "旭升集团", "三花智控", "卧龙电驱", "汇川技术", "国轩高科", "欣旺达", "先导智能", "赢合科技", "捷佳伟创"],
-                    baseCodes: ["002594", "300750", "601127", "300014", "002466", "002460", "000625", "601238", "601633", "600104", "601689", "603305", "002050", "600580", "300124", "002074", "300207", "300450", "300457", "300724"],
-                    deepReasons: [
-                        "全产业链整合优势显著，在电池、电机、电控领域拥有绝对核心技术。目前王朝及海洋系列销量保持高增速，高端品牌方程豹、仰望有效拉动了毛利率水平，海外出口正成为新的增长引擎。",
-                        "全球动力电池绝对霸主，通过材料体系创新（如神行超充电池）持续保持技术领先。其全球储能业务已成为第二增长极，供应链议价能力极强，成本控制水平远超同业。",
-                        "深度绑定华为智选车模式，问界系列凭借HarmonyOS智能座舱及高阶智驾系统，在25-40万价格段展现出极强的品牌号召力和产品溢价能力。生产线智能化程度极高，交付效率行业领先。",
-                        "热管理领域全球龙头，在新能源车热泵系统及冷却回路市场占有率第一。随着高压快充技术的普及，热管理集成组件的单位价值量显著提升，业绩确定性极高。"
-                    ]
-                },
-                "人工智能": {
-                    names: ["科大讯飞", "浪潮信息", "工业富联", "寒武纪", "海康威视", "大华股份", "大模型", "昆仑万维", "三六零", "同花顺", "金山办公", "中科创达", "拓维信息", "润和软件", "紫光股份", "中际旭创", "新易盛", "天孚通信", "太辰光", "光迅科技"],
-                    baseCodes: ["002230", "000977", "601138", "688256", "002415", "002236", "001234", "300418", "601360", "300033", "688111", "300496", "002261", "300339", "000938", "300308", "300502", "300394", "300570", "002281"],
-                    deepReasons: [
-                        "星火大模型已在教育、医疗及开放平台实现大规模落地，凭借国内领先的语义理解与逻辑交互能力，正重塑传统B端工作流程。开发者生态极其丰富，场景化落地速度行业第一。",
-                        "作为全球及中国服务器市场领跑者，在AI服务器定制化及液冷方案领域拥有深厚积累。随着国产算力中心的爆发式建设，其高端AI服务器订单需求供不应求，业绩有望超预期。",
-                        "算力基础设施核心受益者，AI服务器代工业务与全球顶尖芯片巨头深度绑定。随着800G光模块、AI交换机需求的快速爆发，其精密制造能力和垂直整合优势将转化为强劲的利润动能。",
-                        "全球光模块龙头，通过前瞻性布局800G及1.6T产品，已在超大规模数据中心客户中获得核心份额。由于算力集群对带宽需求的非线性增长，公司毛利率与技术壁垒正在同步抬升。"
-                    ]
-                },
-                "医药生物": {
-                    names: ["恒瑞医药", "迈瑞医疗", "药明康德", "爱尔眼科", "智飞生物", "长春高新", "云南白药", "同仁堂", "片仔癀", "华东医药", "上海医药", "复星医药", "沃森生物", "凯莱英", "泰格医药", "昭衍新药", "康龙化成", "百济神州", "信达生物", "君实生物"],
-                    baseCodes: ["600276", "300760", "603259", "300015", "300122", "000661", "000538", "600085", "600436", "000963", "601607", "600196", "300142", "002821", "300347", "603127", "300759", "688235", "01801", "688180"],
-                    deepReasons: [
-                        "国内创新药转型先锋，研发管线极其丰富，在肿瘤、自身免疫及代谢领域已形成强大的产品矩阵。多个自研品种已开启海外授权（Out-licensing）模式，大幅拓宽了盈利上限。",
-                        "国产医疗器械绝对龙头，通过持续的研发投入，在监护、除颤及超声领域已实现对进口品牌的高端替代。海外高端医院渗透率稳步提升，全球供应链布局赋予其极强的抗风险能力。",
-                        "CRO/CDMO全产业链服务霸主，凭借“一体化、端到端”的平台优势，深度参与全球药企的核心研发流程。虽然外部环境有波动，但其技术工艺壁垒及充沛的在手订单保证了增长韧性。",
-                        "罕见病及自研创新药赛道核心标的，拥有全球领先的抗体偶联药物（ADC）技术平台。多项国际临床数据达到设计终点，有望在短时间内实现多个重磅品种的商业化落地。"
-                    ]
-                },
-                "白酒": {
-                    names: ["贵州茅台", "五粮液", "泸州老窖", "山西汾酒", "洋河股份", "古井贡酒", "今世缘", "口子窖", "迎驾贡酒", "舍得酒业", "水井坊", "酒鬼酒", "老白干酒", "金徽酒", "伊力特", "天佑德酒", "顺鑫农业", "皇台酒业", "口子窖", "金种子酒"],
-                    baseCodes: ["600519", "000858", "000568", "600809", "002304", "000596", "603369", "603589", "603198", "600702", "600779", "000799", "600559", "603919", "600197", "002646", "000860", "000995", "603589", "600199"],
-                    deepReasons: [
-                        "白酒行业永恒的标杆，极致稀缺性赋予其极强的金融属性和提价权。随着直销渠道占比持续提升，以及i茅台平台的成功运作，利润回收能力进一步增强，是市场估值的定海神针。",
-                        "浓香型白酒领导者，品牌历史悠久，在高端宴请及馈赠场景中拥有不可撼动的地位。目前正通过精细化渠道运营和产品线梳理，实现价位段的精准覆盖，经营稳健性极高。",
-                        "清香型白酒王者，其全国化扩张速度及品牌年轻化策略执行力极强。核心单品青花汾酒在各省份高增长势头不减，正处于品牌势能加速释放的黄金期，成长空间广阔。",
-                        "拥有深厚的历史文脉支撑，核心单品国窖1573量价齐升，成功站稳千元价位。公司治理结构优秀，对渠道管控极其严格，是国内盈利能力最强的白酒企业之一。"
-                    ]
+        const fetchSectors = async () => {
+            try {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/market/sectors`);
+                const data = await response.json();
+                if (Array.isArray(data)) {
+                    // 初始化板块数据，recommendations 先留空
+                    const formattedSectors: SectorData[] = data.map(item => ({
+                        name: item.name,
+                        change: item.change,
+                        leaders: item.leaders,
+                        recommendations: []
+                    }));
+                    setSectors(formattedSectors);
                 }
-            };
-
-            const data = sectoralData[sectorName] || { names: ["潜力1"], baseCodes: ["600000"], deepReasons: ["该企业经营稳健。"] };
-
-            return Array.from({ length: 20 }, (_, i) => {
-                const nameIdx = i % data.names.length;
-                const reasonIdx = i % data.deepReasons.length;
-                return {
-                    name: data.names[nameIdx],
-                    code: data.baseCodes[nameIdx],
-                    reason: data.deepReasons[reasonIdx]
-                };
-            });
+            } catch (error) {
+                console.error("Failed to fetch sectors:", error);
+            } finally {
+                setLoading(false);
+            }
         };
 
-        const mockSectors: SectorData[] = [
-            { name: "半导体", change: 3.45, leaders: ["北方华创", "中微公司", "长电科技"], recommendations: generateStocks("半导体") },
-            { name: "新能源汽车", change: 2.18, leaders: ["比亚迪", "宁德时代", "赣锋锂业"], recommendations: generateStocks("新能源汽车") },
-            { name: "人工智能", change: 1.92, leaders: ["科大讯飞", "海康威视", "商汤科技"], recommendations: generateStocks("人工智能") },
-            { name: "医药生物", change: -0.85, leaders: ["恒瑞医药", "迈瑞医疗", "药明康德"], recommendations: generateStocks("医药生物") },
-            { name: "白酒", change: -1.23, leaders: ["贵州茅台", "五粮液", "泸州老窖"], recommendations: generateStocks("白酒") },
-        ];
-
-        setTimeout(() => {
-            setSectors(mockSectors);
-            setLoading(false);
-        }, 500);
+        fetchSectors();
+        // 设置定时刷新 (5分钟)
+        const timer = setInterval(fetchSectors, 300000);
+        return () => clearInterval(timer);
     }, []);
 
-    const toggleSector = (name: string) => {
-        setExpandedSector(expandedSector === name ? null : name);
+    // 切换板块展开状态并按需加载成分股
+    const toggleSector = async (name: string) => {
+        if (expandedSector === name) {
+            setExpandedSector(null);
+            return;
+        }
+
+        setExpandedSector(name);
+
+        // 检查是否已经加载过推荐股票
+        const sector = sectors.find(s => s.name === name);
+        if (sector && sector.recommendations.length === 0) {
+            try {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/market/sector_stocks/${encodeURIComponent(name)}`);
+                const stocks = await response.json();
+                if (Array.isArray(stocks)) {
+                    setSectors(prev => prev.map(s =>
+                        s.name === name ? { ...s, recommendations: stocks } : s
+                    ));
+                }
+            } catch (error) {
+                console.error(`Failed to fetch stocks for sector ${name}:`, error);
+            }
+        }
     };
 
     return (
@@ -147,15 +116,15 @@ export default function SectorsPage() {
                                     </div>
                                     <div className="secondary-text">
                                         <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>领涨表现：</span>
-                                        {sector.leaders.join('、')}
+                                        {sector.leaders.join('、') || '正在计算...'}
                                     </div>
                                 </div>
 
                                 <div style={{
-                                    maxHeight: expandedSector === sector.name ? '1500px' : '0',
+                                    maxHeight: expandedSector === sector.name ? '2500px' : '0',
                                     opacity: expandedSector === sector.name ? 1 : 0,
-                                    transition: 'all 0.3s ease-in-out',
-                                    background: 'rgba(0,0,0,0.05)',
+                                    transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                                    background: 'rgba(0,0,0,0.03)',
                                     borderTop: expandedSector === sector.name ? '1px solid var(--border-color)' : 'none',
                                     overflow: 'hidden'
                                 }}>
@@ -169,60 +138,76 @@ export default function SectorsPage() {
                                             alignItems: 'center',
                                             gap: '8px'
                                         }}>
-                                            🎯 专家推荐池 (Top 20)
+                                            🎯 AI 智能推荐池 (Top 21)
                                         </h4>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
-                                            {sector.recommendations.map((stock, idx) => (
-                                                <div key={idx} className="card" style={{
-                                                    padding: '16px',
-                                                    background: 'var(--bg-base)',
-                                                    border: '1px solid var(--border-color)',
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    justifyContent: 'space-between'
-                                                }}>
-                                                    <div>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
-                                                            <span style={{ color: 'var(--text-primary)', fontWeight: '600', fontSize: '14px' }}>{stock.name}</span>
-                                                            <span className="secondary-text" style={{
-                                                                background: 'rgba(255, 255, 255, 0.05)',
-                                                                padding: '1px 6px',
-                                                                borderRadius: '4px',
-                                                                fontSize: '11px'
-                                                            }}>{stock.code}</span>
+                                        {sector.recommendations.length > 0 ? (
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+                                                {sector.recommendations.map((stock, idx) => (
+                                                    <div key={idx} className="card" style={{
+                                                        padding: '16px',
+                                                        background: 'var(--bg-base)',
+                                                        border: '1px solid var(--border-color)',
+                                                        display: 'flex',
+                                                        flexDirection: 'column',
+                                                        justifyContent: 'space-between'
+                                                    }}>
+                                                        <div>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
+                                                                <span style={{ color: 'var(--text-primary)', fontWeight: '600', fontSize: '14px' }}>{stock.name}</span>
+                                                                <span className="secondary-text" style={{
+                                                                    background: 'rgba(255, 255, 255, 0.05)',
+                                                                    padding: '1px 6px',
+                                                                    borderRadius: '4px',
+                                                                    fontSize: '11px'
+                                                                }}>{stock.code}</span>
+                                                            </div>
+                                                            <div style={{ marginBottom: '12px', fontSize: '13px' }}>
+                                                                <span className="secondary-text">当前涨跌</span>
+                                                                <span className={(stock.change || 0) >= 0 ? "stock-up" : "stock-down"} style={{
+                                                                    marginLeft: '8px',
+                                                                    fontWeight: '600'
+                                                                }}>
+                                                                    {(stock.change || 0) >= 0 ? '+' : ''}{(stock.change || 0).toFixed(2)}%
+                                                                </span>
+                                                            </div>
+                                                            <p className="secondary-text" style={{ fontSize: '12px', lineHeight: '1.6', marginBottom: '16px', textAlign: 'justify' }}>
+                                                                {stock.reason}
+                                                            </p>
                                                         </div>
-                                                        <p className="secondary-text" style={{ lineHeight: '1.6', marginBottom: '16px', textAlign: 'justify' }}>
-                                                            {stock.reason}
-                                                        </p>
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                window.location.href = `/stock/${stock.code}`;
+                                                            }}
+                                                            className="btn-primary"
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '8px',
+                                                                background: 'rgba(0, 122, 255, 0.1)',
+                                                                color: 'var(--accent-blue)',
+                                                                fontSize: '12px',
+                                                                border: '1px solid rgba(0, 122, 255, 0.15)'
+                                                            }}
+                                                            onMouseOver={(e) => {
+                                                                e.currentTarget.style.background = 'var(--accent-blue)';
+                                                                e.currentTarget.style.color = 'white';
+                                                            }}
+                                                            onMouseOut={(e) => {
+                                                                e.currentTarget.style.background = 'rgba(0, 122, 255, 0.1)';
+                                                                e.currentTarget.style.color = 'var(--accent-blue)';
+                                                            }}
+                                                        >
+                                                            🚀 查看深度分析
+                                                        </button>
                                                     </div>
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            window.location.href = `/stock/${stock.code}`;
-                                                        }}
-                                                        className="btn-primary"
-                                                        style={{
-                                                            width: '100%',
-                                                            padding: '8px',
-                                                            background: 'rgba(0, 122, 255, 0.1)',
-                                                            color: 'var(--accent-blue)',
-                                                            fontSize: '12px',
-                                                            border: '1px solid rgba(0, 122, 255, 0.15)'
-                                                        }}
-                                                        onMouseOver={(e) => {
-                                                            e.currentTarget.style.background = 'var(--accent-blue)';
-                                                            e.currentTarget.style.color = 'white';
-                                                        }}
-                                                        onMouseOut={(e) => {
-                                                            e.currentTarget.style.background = 'rgba(0, 122, 255, 0.1)';
-                                                            e.currentTarget.style.color = 'var(--accent-blue)';
-                                                        }}
-                                                    >
-                                                        🚀 查看深度分析
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div style={{ textAlign: 'center', padding: '40px' }}>
+                                                <div className="spinner-small" style={{ margin: '0 auto 12px' }}></div>
+                                                <p className="secondary-text">正在精准匹配优质标的...</p>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
