@@ -152,10 +152,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# K-Line Cache
-_kline_cache = {}
-_kline_lock = Lock()
-
 # Captcha Store
 captcha_store = {} # {id: {"code": "...", "expires": ...}}
 
@@ -330,10 +326,43 @@ class StockDataManager:
         self._is_updating_list = False
         self._is_updating_spot = False
         self._is_updating_index = False
-        self._sector_data = None
-        self._last_sector_update = 0
         self.sector_expiry = 300 # 5 minutes
         self._is_updating_sector = False
+
+    def _get_db_cache(self, key: str, max_age: int):
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT result_json, updated_at FROM app_cache WHERE cache_key = ?", (key,))
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                import json, datetime
+                updated_at_str = row['updated_at']
+                updated_at = datetime.datetime.strptime(updated_at_str, "%Y-%m-%d %H:%M:%S").timestamp()
+                if time.time() - updated_at < max_age:
+                    return json.loads(row['result_json'])
+        except Exception as e:
+            logger.error(f"sqlite db cache fetch error {key}: {e}")
+        return None
+
+    def _set_db_cache(self, key: str, data):
+        try:
+            import json, datetime
+            if hasattr(data, 'to_json'):
+                result_json = data.to_json(orient="records", force_ascii=False)
+            else:
+                result_json = json.dumps(data)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO app_cache (cache_key, result_json, updated_at) VALUES (?, ?, ?)",
+                (key, result_json, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"sqlite db cache save error {key}: {e}")
 
     async def update_stock_list(self):
         if self._is_updating_list: return
@@ -345,9 +374,7 @@ class StockDataManager:
                 data = await asyncio.wait_for(asyncio.to_thread(ak.stock_zh_a_spot_em), timeout=5.0)
                 if data is not None and not data.empty:
                     df = data[['代码', '名称']].copy()
-                    with self._lock:
-                        self._stock_list = df
-                        self._last_list_update = time.time()
+                    self._set_db_cache('stock_list', df)
                     logger.info(f"Stock list updated via EM: {len(df)} stocks.")
                     return
             except Exception as e:
@@ -378,21 +405,18 @@ class StockDataManager:
             
             if all_stocks:
                 df = pd.DataFrame(all_stocks).drop_duplicates(subset=['代码'])
-                with self._lock:
-                    self._stock_list = df
-                    self._last_list_update = time.time()
+                self._set_db_cache('stock_list', df)
                 logger.info(f"Stock list fully updated via Sina: {len(df)} stocks.")
                 return
         except Exception as e:
             logger.error(f"Stock list update total error: {str(e)}")
-            if self._stock_list is None:
-                with self._lock:
-                    self._stock_list = pd.DataFrame([
-                        {"代码": "600519", "名称": "贵州茅台"},
-                        {"代码": "300750", "名称": "宁德时代"},
-                        {"代码": "000001", "名称": "平安银行"}
-                    ])
-                    self._last_list_update = time.time()
+            if self._get_db_cache('stock_list', 999999) is None:
+                default_df = pd.DataFrame([
+                    {"代码": "600519", "名称": "贵州茅台"},
+                    {"代码": "300750", "名称": "宁德时代"},
+                    {"代码": "000001", "名称": "平安银行"}
+                ])
+                self._set_db_cache('stock_list', default_df)
         finally:
             self._is_updating_list = False
 
@@ -475,17 +499,16 @@ class StockDataManager:
                 logger.warning(f"Spot data update via Sina (akshare) failed: {e}")
 
         if data is not None and not data.empty:
-            with self._lock:
-                if "代码" in data.columns:
-                    data["代码"] = data["代码"].astype(str).apply(lambda x: x.zfill(6) if x.isdigit() else x)
-                if "涨跌幅" not in data.columns:
-                    data["涨跌幅"] = 0.0
-                else:
-                    data["涨跌幅"] = pd.to_numeric(data["涨跌幅"], errors='coerce').fillna(0.0)
-                
-                self._spot_data = data.fillna(0).replace([float('inf'), float('-inf')], 0)
-                self._last_spot_update = time.time()
-            logger.info(f"Spot data successfully updated via {source}: {len(data)} records.")
+            if "代码" in data.columns:
+                data["代码"] = data["代码"].astype(str).apply(lambda x: x.zfill(6) if x.isdigit() else x)
+            if "涨跌幅" not in data.columns:
+                data["涨跌幅"] = 0.0
+            else:
+                data["涨跌幅"] = pd.to_numeric(data["涨跌幅"], errors='coerce').fillna(0.0)
+            
+            cleaned_data = data.fillna(0).replace([float('inf'), float('-inf')], 0)
+            self._set_db_cache('spot_data', cleaned_data)
+            logger.info(f"Spot data successfully updated via {source}: {len(cleaned_data)} records.")
         
         self._is_updating_spot = False
 
@@ -524,9 +547,7 @@ class StockDataManager:
                                 logger.error(f"Index part parse error: {e}")
                                 continue
                     if res:
-                        with self._lock:
-                            self._index_data = res
-                            self._last_index_update = time.time()
+                        self._set_db_cache('index_data', res)
                         logger.info("Index data updated via Tencent.")
         except Exception as e:
             logger.error(f"Index data update error: {str(e)}")
@@ -550,9 +571,7 @@ class StockDataManager:
                         "leaders": [row['领涨股票']],
                         "code": row['板块代码']
                     })
-                with self._lock:
-                    self._sector_data = sectors
-                    self._last_sector_update = time.time()
+                self._set_db_cache('sector_data', sectors)
                 logger.info(f"Sector data updated: {len(sectors)} sectors.")
                 return
         except Exception as e:
@@ -577,9 +596,7 @@ class StockDataManager:
                             "code": item['label']
                         })
                     if sectors:
-                        with self._lock:
-                            self._sector_data = sectors
-                            self._last_sector_update = time.time()
+                        self._set_db_cache('sector_data', sectors)
                         logger.info("Sector data updated via Sina fallback.")
                         return
         except Exception as e:
@@ -594,35 +611,39 @@ class StockDataManager:
             {"name": "软件开发", "change": 1.85, "leaders": ["金山办公"], "code": "bk0448"},
             {"name": "医药生物", "change": -0.45, "leaders": ["恒瑞医药"], "code": "bk0465"}
         ]
-        with self._lock:
-            self._sector_data = mock_sectors
-            self._last_sector_update = time.time()
+        self._set_db_cache('sector_data', mock_sectors)
         
         self._is_updating_sector = False
 
     def get_sector_data_fast(self, background_tasks: BackgroundTasks):
-        now = time.time()
-        if self._sector_data is None or (now - self._last_sector_update) > self.sector_expiry:
+        data = self._get_db_cache('sector_data', self.sector_expiry)
+        if data is None:
             background_tasks.add_task(self.update_sector_data)
-        return self._sector_data if self._sector_data is not None else []
+        return data if data is not None else []
 
     def get_index_data_fast(self, background_tasks: BackgroundTasks):
-        now = time.time()
-        if self._index_data is None or (now - self._last_index_update) > self.index_expiry:
+        data = self._get_db_cache('index_data', self.index_expiry)
+        if data is None:
             background_tasks.add_task(self.update_index_data)
-        return self._index_data
+        return dict(data) if data is not None else None
 
     def get_stock_list_fast(self, background_tasks: BackgroundTasks):
-        now = time.time()
-        if self._stock_list is None or (now - self._last_list_update) > self.list_expiry:
+        data = self._get_db_cache('stock_list', self.list_expiry)
+        if data is None:
             background_tasks.add_task(self.update_stock_list)
-        return self._stock_list if self._stock_list is not None else pd.DataFrame(columns=["代码", "名称"])
+        return pd.DataFrame(data) if data is not None else pd.DataFrame(columns=["代码", "名称"])
 
     def get_spot_data_fast(self, background_tasks: BackgroundTasks):
-        now = time.time()
-        if self._spot_data is None or (now - self._last_spot_update) > self.spot_expiry:
+        data = self._get_db_cache('spot_data', self.spot_expiry)
+        if data is None:
             background_tasks.add_task(self.update_spot_data)
-        return self._spot_data if self._spot_data is not None else pd.DataFrame(columns=["代码", "名称", "涨跌幅"])
+            return pd.DataFrame(columns=["代码", "名称", "涨跌幅"])
+        # Ensure proper dataframe
+        df = pd.DataFrame(data)
+        if "代码" in df.columns:
+            df["代码"] = df["代码"].astype(str).apply(lambda x: x.zfill(6) if x.isdigit() else x)
+        return df
+
 
 data_manager = StockDataManager()
 
@@ -680,12 +701,44 @@ async def get_tencent_kline(symbol: str):
 
 async def get_cached_kline(symbol: str):
     now = time.time()
-    with _kline_lock:
-        if symbol in _kline_cache:
-            data, timestamp = _kline_cache[symbol]
-            if now - timestamp < 300:  # 5 minutes cache
-                return data
+    cache_key = f"kline_{symbol}"
     
+    # 1. Read from SQLite
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT result_json, updated_at FROM app_cache WHERE cache_key = ?", (cache_key,))
+        row = cursor.fetchone()
+        
+        if row:
+            import json, datetime
+            updated_at_str = row['updated_at']
+            updated_at = datetime.datetime.strptime(updated_at_str, "%Y-%m-%d %H:%M:%S").timestamp()
+            if now - updated_at < 300: # 5 minutes cache
+                conn.close()
+                data = pd.DataFrame(json.loads(row['result_json']))
+                # Ensure all columns present and datatypes
+                data['成交量'] = pd.to_numeric(data['成交量'], errors='coerce').fillna(0)
+                return data
+        conn.close()
+    except Exception as e:
+        logger.error(f"sqlite kline cache fetch error: {e}")
+
+    def save_kline_cache(df, key):
+        try:
+            import json, datetime
+            result_json = df.to_json(orient="records", force_ascii=False)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO app_cache (cache_key, result_json, updated_at) VALUES (?, ?, ?)",
+                (key, result_json, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"sqlite kline cache save error: {e}")
+
     clean_symbol = "".join(filter(str.isdigit, symbol))
     try:
         logger.info(f"Fetching K-line via akshare for {clean_symbol}")
@@ -696,8 +749,7 @@ async def get_cached_kline(symbol: str):
         )
         if df is not None and not df.empty:
             data = df[['日期', '开盘', '最高', '最低', '收盘', '成交量']]
-            with _kline_lock:
-                _kline_cache[symbol] = (data, now)
+            save_kline_cache(data, cache_key)
             return data
     except Exception as e:
         logger.warning(f"akshare K-line failed or timed out for {symbol}: {e}")
@@ -708,12 +760,11 @@ async def get_cached_kline(symbol: str):
         df = await get_tencent_kline(symbol)
         if df is not None and not df.empty:
             data = df[['日期', '开盘', '最高', '最低', '收盘', '成交量']]
-            with _kline_lock:
-                _kline_cache[symbol] = (data, now)
+            save_kline_cache(data, cache_key)
             return data
     except Exception as e:
         logger.error(f"Tencent fallback failed too for {symbol}: {e}")
-        
+    
     return None
 
 @app.on_event("startup")
@@ -2480,9 +2531,7 @@ async def remove_from_watchlist(item: WatchlistItem):
     conn.close()
     return {"success": True, "message": "已从自选移除"}
 
-# --- News Caching ---
-influential_news_cache = {}
-influential_news_cache_lock = Lock()
+
 
 @app.get("/api/stock/influential_news/{symbol}")
 async def get_influential_news(symbol: str):
@@ -2501,18 +2550,26 @@ async def get_influential_news(symbol: str):
     full_symbol = f"{market}{clean_symbol}"
     
     import datetime
+    import json
     current_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    cache_key = f"{full_symbol}_{current_date}"
     
-    with influential_news_cache_lock:
-        # 1. 检查是否存在当天的缓存，如有直接秒回
-        if cache_key in influential_news_cache:
-            return influential_news_cache[cache_key]
-            
-        # 2. 清理并非当天的旧缓存（过期保洁，防止内存泄露）
-        keys_to_delete = [k for k in influential_news_cache.keys() if not k.endswith(current_date)]
-        for k in keys_to_delete:
-            del influential_news_cache[k]
+    # 1. 查数据库当天的缓存
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT result_json FROM news_cache WHERE symbol = ? AND date = ?", (full_symbol, current_date))
+        row = cursor.fetchone()
+        
+        # 顺手删除昨日或更老的冗余缓存（防止硬盘垃圾无限制增长）
+        cursor.execute("DELETE FROM news_cache WHERE date != ?", (current_date,))
+        conn.commit()
+        
+        if row:
+            conn.close()
+            return json.loads(row['result_json'])
+        conn.close()
+    except Exception as e:
+        logger.error(f"News sqlite cache fetch error for {full_symbol}: {e}")
     
     all_raw_news = []
     seen_urls = set()
@@ -2705,9 +2762,19 @@ async def get_influential_news(symbol: str):
         
     target_news.sort(key=lambda x: x.get('time', ''), reverse=True)
         
-    # 将完整的最终数据放入当日缓存池中
-    with influential_news_cache_lock:
-        influential_news_cache[cache_key] = target_news
+    # 将完整的最终数据放入 SQLite 当日缓存池中
+    try:
+        result_json = json.dumps(target_news)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO news_cache (symbol, date, result_json) VALUES (?, ?, ?)",
+            (full_symbol, current_date, result_json)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"News sqlite cache save error for {full_symbol}: {e}")
         
     return target_news
 

@@ -145,6 +145,27 @@ def init_database():
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_analysis_cache_symbol_date ON analysis_cache (symbol, date)')
     
+    # 创建新闻缓存表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS news_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            date TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_news_cache_symbol_date ON news_cache (symbol, date)')
+
+    # 创建通用应用内存替代缓存表 (K线 / 大盘 / 板块热点)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS app_cache (
+            cache_key TEXT PRIMARY KEY,
+            result_json TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
     # 插入默认管理员账号
     default_password = hashlib.sha256("Xinsiwei2026@".encode()).hexdigest()
     try:
