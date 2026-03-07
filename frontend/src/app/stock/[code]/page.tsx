@@ -3,6 +3,8 @@ import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import KLineChart from "@/components/KLineChart";
 import FundFlowTable from "@/components/FundFlowTable";
+import CapitalFlowHistory from "@/components/CapitalFlowHistory";
+import PeerRadarChart from "@/components/PeerRadarChart";
 
 interface StockQuote {
     名称: string;
@@ -39,6 +41,7 @@ interface Analysis {
             sell: string;
             position: string;
         };
+        inst_consensus?: string;
 
         trend_judgment?: Array<{
             period: string;
@@ -97,6 +100,10 @@ export default function StockDetailPage({ params }: { params: { code: string } }
     const [showIntensityTooltip, setShowIntensityTooltip] = useState(false);
     const [fundFlow, setFundFlow] = useState<any>(null);
     const [fundFlowLoading, setFundFlowLoading] = useState(true);
+    const [capitalFlowData, setCapitalFlowData] = useState<any[]>([]);
+    const [capitalFlowLoading, setCapitalFlowLoading] = useState(true);
+    const [peerRadarData, setPeerRadarData] = useState<any>(null);
+    const [peerRadarLoading, setPeerRadarLoading] = useState(true);
 
     // 性能优化：缓存 K线数据和图表参数，避免父组件重绘导致的图表闪烁/重复加载
     const klineData = useMemo(() => {
@@ -308,7 +315,7 @@ export default function StockDetailPage({ params }: { params: { code: string } }
         // 6. Fetch Fund Flow
         async function fetchFundFlow() {
             try {
-                setFundFlowLoading(true);
+                if (active) setFundFlowLoading(true);
                 const res = await fetch(`http://localhost:8000/api/stock/fund_flow/${params.code}`);
                 if (active && res.ok) {
                     setFundFlow(await res.json());
@@ -320,12 +327,44 @@ export default function StockDetailPage({ params }: { params: { code: string } }
             }
         }
 
+        // 7. Fetch Capital Flow History
+        async function fetchCapitalFlowHistory() {
+            try {
+                if (active) setCapitalFlowLoading(true);
+                const res = await fetch(`http://localhost:8000/api/stock/capital_flow/${params.code}`);
+                if (active && res.ok) {
+                    setCapitalFlowData(await res.json());
+                }
+            } catch (e) {
+                console.error("Capital flow history fetch error:", e);
+            } finally {
+                if (active) setCapitalFlowLoading(false);
+            }
+        }
+
+        // 8. Fetch Peer Radar
+        async function fetchPeerRadar() {
+            try {
+                if (active) setPeerRadarLoading(true);
+                const res = await fetch(`http://localhost:8000/api/stock/peer_radar/${params.code}`);
+                if (active && res.ok) {
+                    setPeerRadarData(await res.json());
+                }
+            } catch (e) {
+                console.error("Peer radar fetch error:", e);
+            } finally {
+                if (active) setPeerRadarLoading(false);
+            }
+        }
+
         fetchQuote();
         fetchVisualIndicators();
         fetchKline();
         fetchAnalysis();
         fetchNews();
         fetchFundFlow();
+        fetchCapitalFlowHistory();
+        fetchPeerRadar();
 
         return () => {
             active = false;
@@ -616,6 +655,21 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                         </div>
                     )}
 
+                    {analysis?.structured_analysis?.inst_consensus && analysis.structured_analysis.inst_consensus !== "暂无近期机构评级数据" && (
+                        <div style={{
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            color: 'var(--accent-red)',
+                            background: 'rgba(255, 69, 58, 0.05)',
+                            padding: '10px 14px',
+                            borderRadius: '8px',
+                            borderLeft: '4px solid var(--accent-red)',
+                            marginTop: '4px'
+                        }}>
+                            🏦 机构视野：{analysis.structured_analysis.inst_consensus}
+                        </div>
+                    )}
+
                     {(topLogicPoints.length > 0 || additionalDescription.length > 0) && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                             {additionalDescription.slice(0, 1).map((desc, idx) => (
@@ -623,12 +677,64 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                                     💡 {desc}
                                 </div>
                             ))}
-                            {topLogicPoints.map((point, idx) => (
-                                <div key={`point-${idx}`} style={{ fontSize: '14px', lineHeight: '1.6', color: 'var(--text-secondary)', fontWeight: '600', display: 'flex', gap: '8px' }}>
-                                    <span style={{ color: 'var(--accent-blue)', minWidth: '16px' }}>•</span>
-                                    <span style={{ flex: 1 }}>{point.trim()}</span>
-                                </div>
-                            ))}
+                            {topLogicPoints.map((point, idx) => {
+                                const isUnentered = point.includes('未进场') || point.includes('左侧客') || point.includes('【未进场】');
+                                const isChase = point.includes('追涨') || point.includes('右侧客') || point.includes('【已进场】');
+                                const isTrapped = point.includes('套牢') || point.includes('持股客') || point.includes('【已套牢】');
+
+                                let icon = '•';
+                                let textColor = 'var(--text-secondary)';
+                                let bgColor = 'transparent';
+                                let padding = '0';
+                                let bRadius = '0';
+
+                                if (isUnentered) { icon = '🛡️'; textColor = 'var(--accent-blue)'; bgColor = 'rgba(0,122,255,0.05)'; padding = '8px 12px'; bRadius = '8px'; }
+                                if (isChase) { icon = '⚔️'; textColor = 'var(--accent-red)'; bgColor = 'rgba(255,69,58,0.05)'; padding = '8px 12px'; bRadius = '8px'; }
+                                if (isTrapped) { icon = '🔒'; textColor = 'var(--accent-green)'; bgColor = 'rgba(50,215,75,0.05)'; padding = '8px 12px'; bRadius = '8px'; }
+
+                                return (
+                                    <div
+                                        key={`point-${idx}`}
+                                        style={{
+                                            fontSize: '14px',
+                                            lineHeight: '1.6',
+                                            color: textColor,
+                                            fontWeight: '600',
+                                            display: 'flex',
+                                            gap: '12px',
+                                            background: bgColor,
+                                            padding: padding,
+                                            borderRadius: bRadius,
+                                            transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                                            cursor: 'default',
+                                            border: '1px solid transparent'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.transform = 'translateX(8px) scale(1.01)';
+                                            e.currentTarget.style.boxShadow = `0 8px 20px ${bgColor}`;
+                                            e.currentTarget.style.borderColor = textColor.replace(')', ', 0.3)').replace('var(--', 'rgba(0, 122, 255');
+                                            // 这里的 replace 是为了处理 var 变量，如果 var 不好处理，可以简化为简单的阴影
+                                            e.currentTarget.style.borderColor = 'currentColor';
+                                            e.currentTarget.style.opacity = '1';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.transform = 'translateX(0) scale(1)';
+                                            e.currentTarget.style.boxShadow = 'none';
+                                            e.currentTarget.style.borderColor = 'transparent';
+                                        }}
+                                    >
+                                        <span style={{
+                                            color: textColor,
+                                            minWidth: '20px',
+                                            fontSize: '16px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>{icon}</span>
+                                        <span style={{ flex: 1 }}>{point.trim()}</span>
+                                    </div>
+                                )
+                            })}
                         </div>
                     )}
                 </div>
@@ -824,17 +930,57 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                                             )}
                                         </div>
                                         <div style={{ flex: 1, paddingBottom: idx === arr.length - 1 ? '0' : '24px' }}>
-                                            <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--accent-blue)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--accent-blue)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{
+                                                    padding: '2px 8px',
+                                                    borderRadius: '6px',
+                                                    background: 'rgba(0, 122, 255, 0.1)',
+                                                    fontSize: '11px',
+                                                    fontWeight: '900',
+                                                    border: '1px solid rgba(0, 122, 255, 0.2)'
+                                                }}>
+                                                    {title.includes('短期') ? 'Tactical' : title.includes('中期') ? 'Strategic' : 'Visionary'}
+                                                </span>
                                                 {title}
                                             </div>
                                             {detail && (
-                                                <div className="roadmap-text-box" style={{ fontSize: '13.5px', color: 'var(--text-secondary)', lineHeight: '1.6', background: 'var(--bg-card)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-                                                    {detail.trim().split(/[；;。]/).filter(t => t.trim()).map((p, i) => (
-                                                        <div key={i} style={{ marginBottom: '4px', display: 'flex', gap: '6px' }}>
-                                                            {p.includes('📌') || p.includes('🎯') ? null : <span style={{ opacity: 0.5 }}>•</span>}
-                                                            <span>{p.trim()}</span>
-                                                        </div>
-                                                    ))}
+                                                <div className="roadmap-text-box" style={{
+                                                    fontSize: '13.5px',
+                                                    color: 'var(--text-secondary)',
+                                                    lineHeight: '1.7',
+                                                    background: 'var(--bg-base)',
+                                                    padding: '16px 20px',
+                                                    borderRadius: '16px',
+                                                    border: '1px solid var(--border-color)',
+                                                    boxShadow: '0 2px 8px rgba(0,0,0,0.02)'
+                                                }}>
+                                                    {detail.trim().split(/[；;。]/).filter(t => t.trim()).map((p, i) => {
+                                                        const text = p.trim();
+                                                        const isLogic = text.includes('📌');
+                                                        const isTarget = text.includes('🎯');
+
+                                                        return (
+                                                            <div key={i} style={{
+                                                                marginBottom: i === detail.split(/[；;。]/).length - 1 ? 0 : '10px',
+                                                                display: 'flex',
+                                                                flexDirection: (isLogic || isTarget) ? 'column' : 'row',
+                                                                gap: '8px',
+                                                                padding: (isLogic || isTarget) ? '10px 14px' : '0',
+                                                                background: isLogic ? 'rgba(50, 215, 75, 0.05)' : isTarget ? 'rgba(255, 159, 10, 0.05)' : 'transparent',
+                                                                borderRadius: '10px',
+                                                                borderLeft: isLogic ? '3px solid #32d74b' : isTarget ? '3px solid #ff9f0a' : 'none'
+                                                            }}>
+                                                                {!isLogic && !isTarget && <span style={{ opacity: 0.5, marginTop: '2px' }}>•</span>}
+                                                                <span style={{
+                                                                    fontWeight: (isLogic || isTarget) ? '700' : '400',
+                                                                    color: isLogic ? '#32d74b' : isTarget ? '#ff9f0a' : 'inherit',
+                                                                    fontSize: (isLogic || isTarget) ? '13px' : '13.5px'
+                                                                }}>
+                                                                    {text}
+                                                                </span>
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
                                             )}
                                         </div>
@@ -986,6 +1132,8 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                     </div>
 
                     <FundFlowTable data={fundFlow} loading={fundFlowLoading} />
+
+                    <CapitalFlowHistory data={capitalFlowData} loading={capitalFlowLoading} />
 
                     <div className="card" style={{ padding: '32px', overflow: 'visible', borderTop: '4px solid var(--accent-green)' }}>
                         <h3 style={{ marginBottom: '24px', fontSize: '18px', fontWeight: '600' }}>📊 指标综合监测</h3>
@@ -1160,20 +1308,24 @@ export default function StockDetailPage({ params }: { params: { code: string } }
                     </div>
                 </div>
 
-                <div className="card" style={{ padding: '20px', borderTop: `4px solid ${analysis?.signal === 'Buy' ? 'var(--accent-red)' : analysis?.signal === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <span style={{ fontSize: '24px' }}>🚀</span>
-                            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '800' }}>AI 智能分析报告</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <PeerRadarChart data={peerRadarData} loading={peerRadarLoading} symbol={quote?.名称 || params.code} />
+
+                    <div className="card" style={{ padding: '20px', borderTop: `4px solid ${analysis?.signal === 'Buy' ? 'var(--accent-red)' : analysis?.signal === 'Sell' ? 'var(--accent-green)' : 'var(--accent-blue)'}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <span style={{ fontSize: '24px' }}>🚀</span>
+                                <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '800' }}>AI 智能分析报告</h3>
+                            </div>
+                            <span style={{ fontSize: '11px', color: 'var(--accent-blue)', backgroundColor: 'rgba(0,122,255,0.08)', padding: '4px 12px', borderRadius: '20px', fontWeight: '700' }}>Deepseek实时分析</span>
                         </div>
-                        <span style={{ fontSize: '11px', color: 'var(--accent-blue)', backgroundColor: 'rgba(0,122,255,0.08)', padding: '4px 12px', borderRadius: '20px', fontWeight: '700' }}>Deepseek实时分析</span>
-                    </div>
 
-                    {renderAnalysisSection()}
+                        {renderAnalysisSection()}
 
-                    <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
-                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', textAlign: 'center', lineHeight: '1.8' }}>
-                            * 本报告基于历史量价行为概率模型推断，不构成投资建议。股市具有高度不确定性，请决策前充分评估风险。
+                        <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--border-color)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', textAlign: 'center', lineHeight: '1.8' }}>
+                                * 本报告基于历史量价行为概率模型推断，不构成投资建议。股市具有高度不确定性，请决策前充分评估风险。
+                            </div>
                         </div>
                     </div>
                 </div>

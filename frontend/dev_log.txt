@@ -1,0 +1,12 @@
+
+> stock-analysis-frontend@0.1.0 dev
+> next dev
+
+  ▲ Next.js 14.2.0
+  - Local:        http://localhost:3000
+
+ ✓ Starting...
+ ✓ Ready in 3.4s
+ ○ Compiling /stock/[code] ...
+ ✓ Compiled /stock/[code] in 4.5s (2585 modules)
+ GET /stock/600519 200 in 5151ms
